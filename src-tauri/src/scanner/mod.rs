@@ -68,6 +68,14 @@ pub async fn scan_dir(
 
     // Phase 2: process images in rayon, send DB writes through a channel
     // to avoid calling async code from rayon threads.
+    //
+    // Cap threads at (num_cpus - 1) so the system stays responsive.
+    let num_threads = (num_cpus::get().saturating_sub(1)).max(1);
+    let pool_rayon = rayon::ThreadPoolBuilder::new()
+        .num_threads(num_threads)
+        .build()
+        .unwrap_or_else(|_| rayon::ThreadPoolBuilder::new().build().unwrap());
+
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<NewImage>();
     let counter = Arc::new(AtomicUsize::new(0));
     let last_emit = Arc::new(std::sync::Mutex::new(Instant::now()));
@@ -79,7 +87,7 @@ pub async fn scan_dir(
 
     // Spawn rayon work on a blocking thread so it doesn't block the tokio executor
     let rayon_task = tokio::task::spawn_blocking(move || {
-        paths.par_iter().for_each(|path| {
+        pool_rayon.install(|| paths.par_iter().for_each(|path| {
             if cancelled_clone.load(Ordering::Relaxed) {
                 return;
             }
@@ -97,15 +105,23 @@ pub async fn scan_dir(
             };
 
             let exif_data = exif::extract(path);
-            let phash = hash::compute(path);
 
-            let (width_px, height_px) =
-                if exif_data.width_px.is_some() && exif_data.height_px.is_some() {
-                    (exif_data.width_px, exif_data.height_px)
-                } else {
-                    match image::image_dimensions(path) {
-                        Ok((w, h)) => (Some(w as i64), Some(h as i64)),
-                        Err(_) => (None, None),
+            // Open image once — use it for both dimensions and hashing.
+            // Thumbnail down to 64px before hashing: the hasher only needs
+            // 8×8 pixels, so decoding at full resolution is wasteful.
+            let (width_px, height_px, phash) =
+                match image::open(path) {
+                    Ok(img) => {
+                        let w = img.width() as i64;
+                        let h = img.height() as i64;
+                        // Shrink before hashing to cut memory and CPU
+                        let small = img.thumbnail(64, 64);
+                        let hash = hash::compute_from_image(&small);
+                        (Some(w), Some(h), hash)
+                    }
+                    Err(_) => {
+                        // Corrupt/unsupported — try EXIF dims only
+                        (exif_data.width_px, exif_data.height_px, None)
                     }
                 };
 
@@ -146,7 +162,7 @@ pub async fn scan_dir(
             if should_emit {
                 emit_progress(&app_clone, "hashing", done, total, &path_str);
             }
-        });
+        })); // end pool_rayon.install
         // Drop tx so the receiver loop below terminates
         drop(tx_clone);
     });

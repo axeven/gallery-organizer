@@ -1,14 +1,16 @@
-use std::path::Path;
-
+use image::DynamicImage;
 use image_hasher::{HashAlg, HasherConfig};
 
-pub fn compute(path: &Path) -> Option<String> {
-    let img = image::open(path).ok()?;
-    let hasher = HasherConfig::new()
+fn make_hasher() -> image_hasher::Hasher {
+    HasherConfig::new()
         .hash_alg(HashAlg::Gradient)
         .hash_size(8, 8)
-        .to_hasher();
-    let hash = hasher.hash_image(&img);
+        .to_hasher()
+}
+
+/// Hash an already-decoded image (avoids a second decode).
+pub fn compute_from_image(img: &DynamicImage) -> Option<String> {
+    let hash = make_hasher().hash_image(img);
     Some(hex::encode(hash.as_bytes()))
 }
 
