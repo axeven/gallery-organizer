@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        INSERT INTO processing_jobs\n            (status, operation, params_json, output_mode, output_dir, total_images, created_at)\n        VALUES ('queued', ?, ?, ?, ?, ?, ?)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "f44741a766006d2e8b7ce16d80d005f728cf66917719221d71aa0d66e455ee4f"
+}

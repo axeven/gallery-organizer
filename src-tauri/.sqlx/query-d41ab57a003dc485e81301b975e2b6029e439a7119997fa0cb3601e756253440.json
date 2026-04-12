@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE job_images SET status = ?, error = ? WHERE job_id = ? AND image_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "d41ab57a003dc485e81301b975e2b6029e439a7119997fa0cb3601e756253440"
+}

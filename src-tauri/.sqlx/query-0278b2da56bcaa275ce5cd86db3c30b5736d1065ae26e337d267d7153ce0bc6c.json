@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT image_id FROM job_images WHERE job_id = ? AND status = 'failed'",
+  "describe": {
+    "columns": [
+      {
+        "name": "image_id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "0278b2da56bcaa275ce5cd86db3c30b5736d1065ae26e337d267d7153ce0bc6c"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM groups WHERE group_type LIKE ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "68a9703653ce8febf28a134736e0fc78f085f9f4b54a73350ac0ea28f1c352e1"
+}

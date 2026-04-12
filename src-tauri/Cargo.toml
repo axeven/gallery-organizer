@@ -1,0 +1,53 @@
+[package]
+name = "gallery-organizer"
+version = "0.1.0"
+description = "A cross-platform desktop gallery organizer"
+authors = []
+edition = "2021"
+
+[lib]
+name = "gallery_organizer_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "gallery-organizer"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-shell = "2"
+tauri-plugin-fs = "2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "migrate", "chrono"] }
+tokio = { version = "1", features = ["full"] }
+
+walkdir = "2"
+rayon = "1"
+
+image = { version = "0.25", features = ["jpeg", "webp", "png"] }
+kamadak-exif = "0.5"
+image_hasher = "2"
+webp = "0.3"
+
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+anyhow = "1"
+log = "0.4"
+env_logger = "0.11"
+base64 = "0.22"
+hex = "0.4"
+tempfile = "3"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE processing_jobs SET status = ?, finished_at = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "bc72eb234d5aaf0a6d025802a3440994650a94cebc3cf7065425f1b0ba80caa9"
+}

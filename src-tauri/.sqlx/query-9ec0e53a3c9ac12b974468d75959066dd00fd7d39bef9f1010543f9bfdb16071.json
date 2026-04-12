@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE processing_jobs SET processed_count = ?, failed_count = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "9ec0e53a3c9ac12b974468d75959066dd00fd7d39bef9f1010543f9bfdb16071"
+}

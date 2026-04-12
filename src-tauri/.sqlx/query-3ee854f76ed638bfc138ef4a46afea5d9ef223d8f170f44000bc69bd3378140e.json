@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO job_images (job_id, image_id, status) VALUES (?, ?, 'queued')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "3ee854f76ed638bfc138ef4a46afea5d9ef223d8f170f44000bc69bd3378140e"
+}

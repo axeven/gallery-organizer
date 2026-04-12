@@ -1,0 +1,98 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT * FROM images WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "file_path",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "file_name",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "file_size_bytes",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "width_px",
+        "ordinal": 4,
+        "type_info": "Integer"
+      },
+      {
+        "name": "height_px",
+        "ordinal": 5,
+        "type_info": "Integer"
+      },
+      {
+        "name": "format",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "taken_at",
+        "ordinal": 7,
+        "type_info": "Integer"
+      },
+      {
+        "name": "taken_at_source",
+        "ordinal": 8,
+        "type_info": "Text"
+      },
+      {
+        "name": "camera_make",
+        "ordinal": 9,
+        "type_info": "Text"
+      },
+      {
+        "name": "camera_model",
+        "ordinal": 10,
+        "type_info": "Text"
+      },
+      {
+        "name": "perceptual_hash",
+        "ordinal": 11,
+        "type_info": "Text"
+      },
+      {
+        "name": "scanned_at",
+        "ordinal": 12,
+        "type_info": "Integer"
+      },
+      {
+        "name": "updated_at",
+        "ordinal": 13,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "88d424c7762a8495e97cc208f6f8520e60c04c72c984029a7dd0d931c58becab"
+}
