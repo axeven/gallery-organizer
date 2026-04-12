@@ -237,6 +237,28 @@ pub async fn dismiss_cluster(pool: &SqlitePool, group_id: i64) -> Result<()> {
     Ok(())
 }
 
+pub async fn remove_group(pool: &SqlitePool, group_id: i64) -> Result<()> {
+    sqlx::query!("DELETE FROM groups WHERE id = ?", group_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn remove_image_from_group(
+    pool: &SqlitePool,
+    group_id: i64,
+    image_id: i64,
+) -> Result<()> {
+    sqlx::query!(
+        "DELETE FROM group_members WHERE group_id = ? AND image_id = ?",
+        group_id,
+        image_id
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 pub async fn get_duplicate_cluster_members(
     pool: &SqlitePool,
 ) -> Result<Vec<(i64, i64, i64, i64)>> {

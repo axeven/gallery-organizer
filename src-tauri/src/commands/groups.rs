@@ -44,7 +44,6 @@ pub async fn rebuild_groups(
     let groups_created = crate::grouper::rebuild_groups(
         &state.db,
         &group_type,
-        &settings.date_group_granularity,
         settings.duplicate_hash_distance,
     )
     .await
@@ -112,6 +111,27 @@ pub async fn dismiss_cluster(
     group_id: i64,
 ) -> Result<(), String> {
     queries::dismiss_cluster(&state.db, group_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn remove_group(
+    state: State<'_, Arc<AppState>>,
+    group_id: i64,
+) -> Result<(), String> {
+    queries::remove_group(&state.db, group_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn remove_image_from_group(
+    state: State<'_, Arc<AppState>>,
+    group_id: i64,
+    image_id: i64,
+) -> Result<(), String> {
+    queries::remove_image_from_group(&state.db, group_id, image_id)
         .await
         .map_err(|e| e.to_string())
 }

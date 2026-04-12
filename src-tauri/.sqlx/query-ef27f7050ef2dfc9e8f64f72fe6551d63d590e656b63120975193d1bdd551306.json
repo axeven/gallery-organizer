@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM group_members WHERE group_id = ? AND image_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "ef27f7050ef2dfc9e8f64f72fe6551d63d590e656b63120975193d1bdd551306"
+}

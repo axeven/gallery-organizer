@@ -7,20 +7,19 @@ use sqlx::SqlitePool;
 pub async fn rebuild_groups(
     pool: &SqlitePool,
     group_type: &str,
-    date_granularity: &str,
     dupe_threshold: u32,
 ) -> Result<usize> {
     let mut total = 0;
 
     match group_type {
         "date" => {
-            total += date_grouper::rebuild(pool, date_granularity).await?;
+            total += date_grouper::rebuild(pool).await?;
         }
         "duplicates" => {
             total += dupe_grouper::rebuild(pool, dupe_threshold).await?;
         }
         "all" => {
-            total += date_grouper::rebuild(pool, date_granularity).await?;
+            total += date_grouper::rebuild(pool).await?;
             total += dupe_grouper::rebuild(pool, dupe_threshold).await?;
         }
         _ => {}

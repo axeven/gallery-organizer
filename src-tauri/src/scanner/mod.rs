@@ -106,24 +106,31 @@ pub async fn scan_dir(
 
             let exif_data = exif::extract(path);
 
-            // Open image once — use it for both dimensions and hashing.
-            // Thumbnail down to 64px before hashing: the hasher only needs
-            // 8×8 pixels, so decoding at full resolution is wasteful.
-            let (width_px, height_px, phash) =
+            // Decode image for dimensions + perceptual hash.
+            // For JPEGs, use zune-jpeg's 1/8-scale partial decode —
+            // the DCT downscales in-hardware, so we decode ~64× fewer
+            // pixels while still getting a hash-quality thumbnail.
+            // Non-JPEG files fall back to the full image crate decode.
+            let is_jpeg = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| matches!(e.to_lowercase().as_str(), "jpg" | "jpeg"))
+                .unwrap_or(false);
+
+            let (width_px, height_px, phash) = if is_jpeg {
+                hash::decode_jpeg_fast(path)
+            } else {
                 match image::open(path) {
                     Ok(img) => {
                         let w = img.width() as i64;
                         let h = img.height() as i64;
-                        // Shrink before hashing to cut memory and CPU
                         let small = img.thumbnail(64, 64);
                         let hash = hash::compute_from_image(&small);
                         (Some(w), Some(h), hash)
                     }
-                    Err(_) => {
-                        // Corrupt/unsupported — try EXIF dims only
-                        (exif_data.width_px, exif_data.height_px, None)
-                    }
-                };
+                    Err(_) => (exif_data.width_px, exif_data.height_px, None),
+                }
+            };
 
             let format = path
                 .extension()

@@ -91,6 +91,8 @@ pub fn run() {
             commands::groups::get_duplicate_clusters,
             commands::groups::set_keeper,
             commands::groups::dismiss_cluster,
+            commands::groups::remove_group,
+            commands::groups::remove_image_from_group,
             commands::jobs::create_job,
             commands::jobs::start_job,
             commands::jobs::cancel_job,

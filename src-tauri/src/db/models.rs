@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
 pub struct DbImage {
     pub id: i64,
     pub file_path: String,
@@ -34,6 +35,7 @@ pub struct NewImage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
 pub struct DbGroup {
     pub id: i64,
     pub group_type: String,

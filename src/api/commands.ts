@@ -134,6 +134,12 @@ export const setKeeper = (groupId: number, imageId: number) =>
 export const dismissCluster = (groupId: number) =>
   invoke<void>("dismiss_cluster", { groupId });
 
+export const removeGroup = (groupId: number) =>
+  invoke<void>("remove_group", { groupId });
+
+export const removeImageFromGroup = (groupId: number, imageId: number) =>
+  invoke<void>("remove_image_from_group", { groupId, imageId });
+
 export const createJob = (payload: {
   imageIds: number[];
   operation: string;
