@@ -15,7 +15,18 @@ export default function ScanPage() {
   const handleScan = async () => {
     if (!folderPath) return;
     resetScan();
-    await scanFolder(folderPath, recursive);
+    useScanStore.getState().setScanProgress({
+      phase: "walking",
+      scanned: 0,
+      total: 0,
+      currentPath: folderPath,
+    });
+    try {
+      await scanFolder(folderPath, recursive);
+    } catch (e) {
+      console.error("scan_folder error:", e);
+      resetScan();
+    }
   };
 
   const handleCancel = async () => {

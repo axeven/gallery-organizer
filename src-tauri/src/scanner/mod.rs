@@ -19,6 +19,7 @@ pub struct ScanProgressEvent {
     pub phase: String,
     pub scanned: usize,
     pub total: usize,
+    #[serde(rename = "currentPath")]
     pub current_path: String,
 }
 
@@ -37,9 +38,9 @@ pub async fn scan_dir(
 ) -> ScanResult {
     let start = Instant::now();
 
-    // Phase 1: walk directory
     emit_progress(&app, "walking", 0, 0, &folder_path);
 
+    // Phase 1: collect paths (sync, fast)
     let paths: Vec<std::path::PathBuf> = {
         let walker = if recursive {
             WalkDir::new(&folder_path)
@@ -65,87 +66,101 @@ pub async fn scan_dir(
     let total = paths.len();
     emit_progress(&app, "hashing", 0, total, "");
 
+    // Phase 2: process images in rayon, send DB writes through a channel
+    // to avoid calling async code from rayon threads.
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<NewImage>();
     let counter = Arc::new(AtomicUsize::new(0));
     let last_emit = Arc::new(std::sync::Mutex::new(Instant::now()));
 
-    paths.par_iter().for_each(|path| {
-        if cancelled.load(Ordering::Relaxed) {
-            return;
-        }
+    let app_clone = app.clone();
+    let counter_clone = counter.clone();
+    let cancelled_clone = cancelled.clone();
+    let tx_clone = tx.clone();
 
-        let path_str = path.to_str().unwrap_or("").to_string();
-        let file_name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("")
-            .to_string();
-
-        // Get file metadata
-        let file_size = match std::fs::metadata(path) {
-            Ok(m) => m.len() as i64,
-            Err(_) => return,
-        };
-
-        // Extract EXIF
-        let exif_data = exif::extract(path);
-
-        // Compute perceptual hash
-        let phash = hash::compute(path);
-
-        // Get image dimensions (from image crate if EXIF didn't provide them)
-        let (width_px, height_px) = if exif_data.width_px.is_some() && exif_data.height_px.is_some() {
-            (exif_data.width_px, exif_data.height_px)
-        } else {
-            match image::image_dimensions(path) {
-                Ok((w, h)) => (Some(w as i64), Some(h as i64)),
-                Err(_) => (None, None),
+    // Spawn rayon work on a blocking thread so it doesn't block the tokio executor
+    let rayon_task = tokio::task::spawn_blocking(move || {
+        paths.par_iter().for_each(|path| {
+            if cancelled_clone.load(Ordering::Relaxed) {
+                return;
             }
-        };
 
-        let format = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_lowercase());
+            let path_str = path.to_str().unwrap_or("").to_string();
+            let file_name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
 
-        let new_image = NewImage {
-            file_path: path_str.clone(),
-            file_name,
-            file_size_bytes: file_size,
-            width_px,
-            height_px,
-            format,
-            taken_at: exif_data.taken_at,
-            taken_at_source: exif_data.taken_at_source,
-            camera_make: exif_data.camera_make,
-            camera_model: exif_data.camera_model,
-            perceptual_hash: phash,
-        };
+            let file_size = match std::fs::metadata(path) {
+                Ok(m) => m.len() as i64,
+                Err(_) => return,
+            };
 
-        // Write to DB — block_in_place lets us call async from rayon thread
-        let pool_clone = pool.clone();
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(queries::upsert_image(&pool_clone, &new_image))
-                .ok();
+            let exif_data = exif::extract(path);
+            let phash = hash::compute(path);
+
+            let (width_px, height_px) =
+                if exif_data.width_px.is_some() && exif_data.height_px.is_some() {
+                    (exif_data.width_px, exif_data.height_px)
+                } else {
+                    match image::image_dimensions(path) {
+                        Ok((w, h)) => (Some(w as i64), Some(h as i64)),
+                        Err(_) => (None, None),
+                    }
+                };
+
+            let format = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.to_lowercase());
+
+            let new_image = NewImage {
+                file_path: path_str.clone(),
+                file_name,
+                file_size_bytes: file_size,
+                width_px,
+                height_px,
+                format,
+                taken_at: exif_data.taken_at,
+                taken_at_source: exif_data.taken_at_source,
+                camera_make: exif_data.camera_make,
+                camera_model: exif_data.camera_model,
+                perceptual_hash: phash,
+            };
+
+            // Send to async DB writer — non-blocking send
+            let _ = tx_clone.send(new_image);
+
+            let done = counter_clone.fetch_add(1, Ordering::Relaxed) + 1;
+
+            let should_emit = done % 100 == 0 || {
+                let mut last = last_emit.lock().unwrap();
+                if last.elapsed() >= Duration::from_millis(100) {
+                    *last = Instant::now();
+                    true
+                } else {
+                    false
+                }
+            };
+
+            if should_emit {
+                emit_progress(&app_clone, "hashing", done, total, &path_str);
+            }
         });
-
-        let done = counter.fetch_add(1, Ordering::Relaxed) + 1;
-
-        // Throttle events: emit every 100 files or every 50ms
-        let should_emit = done % 100 == 0 || {
-            let mut last = last_emit.lock().unwrap();
-            if last.elapsed() >= Duration::from_millis(50) {
-                *last = Instant::now();
-                true
-            } else {
-                false
-            }
-        };
-
-        if should_emit {
-            emit_progress(&app, "hashing", done, total, &path_str);
-        }
+        // Drop tx so the receiver loop below terminates
+        drop(tx_clone);
     });
+
+    // Drop our own tx so the channel closes when rayon is done
+    drop(tx);
+
+    // Phase 3: consume DB writes on the async side
+    while let Some(new_image) = rx.recv().await {
+        queries::upsert_image(&pool, &new_image).await.ok();
+    }
+
+    // Wait for rayon to fully finish
+    let _ = rayon_task.await;
 
     let images_found = counter.load(Ordering::Relaxed);
     emit_progress(&app, "done", images_found, total, "");

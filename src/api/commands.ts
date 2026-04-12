@@ -176,12 +176,10 @@ export async function setupEventBridge(queryClient: QueryClient): Promise<void> 
   // Tear down any previous listeners (e.g. HMR)
   teardownEventBridge();
 
-  const scanStore = useScanStore.getState();
-  const jobStore = useJobStore.getState();
-
   unlisteners = await Promise.all([
+    // Always read from store at event time, not at setup time
     listen<ScanProgressEvent>("scan:progress", (e) => {
-      scanStore.setScanProgress(e.payload);
+      useScanStore.getState().setScanProgress(e.payload);
     }),
 
     listen("groups:rebuilt", () => {
@@ -190,17 +188,17 @@ export async function setupEventBridge(queryClient: QueryClient): Promise<void> 
     }),
 
     listen<JobProgressEvent>("job:progress", (e) => {
-      jobStore.updateJobProgress(e.payload);
+      useJobStore.getState().updateJobProgress(e.payload);
     }),
 
     listen<{ job_id: number }>("job:complete", (e) => {
-      jobStore.clearJob(e.payload.job_id);
+      useJobStore.getState().clearJob(e.payload.job_id);
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
       queryClient.invalidateQueries({ queryKey: ["images"] });
     }),
 
     listen<{ job_id: number }>("job:failed", (e) => {
-      jobStore.clearJob(e.payload.job_id);
+      useJobStore.getState().clearJob(e.payload.job_id);
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
     }),
   ]);

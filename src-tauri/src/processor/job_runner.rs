@@ -11,6 +11,7 @@ use crate::db::queries;
 use crate::processor::{compress, output};
 
 #[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct JobProgressEvent {
     pub job_id: i64,
     pub processed: i64,
