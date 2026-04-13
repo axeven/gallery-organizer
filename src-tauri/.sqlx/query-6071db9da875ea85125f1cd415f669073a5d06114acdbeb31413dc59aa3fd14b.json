@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        SELECT i.id, i.file_path\n        FROM images i\n        JOIN group_members gm ON gm.image_id = i.id\n        WHERE gm.group_id = ?\n        ORDER BY i.taken_at ASC, i.file_name ASC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "file_path",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false
+    ]
+  },
+  "hash": "6071db9da875ea85125f1cd415f669073a5d06114acdbeb31413dc59aa3fd14b"
+}

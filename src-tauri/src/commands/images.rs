@@ -29,7 +29,7 @@ pub async fn get_images(
 
     // Validate sort params to prevent SQL injection
     let sort_by = match sort_by {
-        "file_name" | "file_size" | "taken_at" => sort_by,
+        "file_name" | "file_size" | "taken_at" | "perceptual_hash" => sort_by,
         _ => "taken_at",
     };
     let sort_dir = match sort_dir {
@@ -43,6 +43,53 @@ pub async fn get_images(
             .map_err(|e| e.to_string())?;
 
     Ok(PaginatedImages { items, total })
+}
+
+#[tauri::command]
+pub async fn trash_image(
+    state: State<'_, Arc<AppState>>,
+    image_id: i64,
+) -> Result<(), String> {
+    let img = queries::get_image_by_id(&state.db, image_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("image {image_id} not found"))?;
+
+    trash::delete(&img.file_path).map_err(|e| e.to_string())?;
+
+    // Remove from DB and all group memberships (cascade handles group_members)
+    queries::delete_image(&state.db, image_id)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_full_image(
+    state: State<'_, Arc<AppState>>,
+    image_id: i64,
+) -> Result<(String, String), String> {
+    // Returns (base64_data, mime_type)
+    let img_record = queries::get_image_by_id(&state.db, image_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("image {image_id} not found"))?;
+
+    let data = std::fs::read(&img_record.file_path).map_err(|e| e.to_string())?;
+
+    let mime = match img_record.format.as_deref() {
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("png") => "image/png",
+        Some("webp") => "image/webp",
+        Some("gif") => "image/gif",
+        Some("tiff") | Some("tif") => "image/tiff",
+        Some("heic") | Some("heif") => "image/heic",
+        _ => "image/jpeg",
+    };
+
+    let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
+    Ok((b64, mime.to_string()))
 }
 
 #[tauri::command]

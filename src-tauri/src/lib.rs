@@ -91,6 +91,7 @@ pub fn run() {
             commands::groups::get_duplicate_clusters,
             commands::groups::set_keeper,
             commands::groups::dismiss_cluster,
+            commands::groups::export_group,
             commands::groups::remove_group,
             commands::groups::remove_image_from_group,
             commands::jobs::create_job,
@@ -99,6 +100,7 @@ pub fn run() {
             commands::jobs::get_jobs,
             commands::jobs::get_job_detail,
             commands::jobs::retry_failed_images,
+            commands::maintenance::cleanup_stale_images,
             commands::settings::get_settings,
             commands::settings::update_settings,
             commands::settings::open_folder_dialog,
@@ -106,6 +108,8 @@ pub fn run() {
             commands::images::get_images,
             commands::images::get_image_detail,
             commands::images::get_thumbnail,
+            commands::images::get_full_image,
+            commands::images::trash_image,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

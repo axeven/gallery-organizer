@@ -134,11 +134,20 @@ export const setKeeper = (groupId: number, imageId: number) =>
 export const dismissCluster = (groupId: number) =>
   invoke<void>("dismiss_cluster", { groupId });
 
+export const exportGroup = (groupId: number, outputDir: string, moveFiles: boolean) =>
+  invoke<number>("export_group", { groupId, outputDir, moveFiles });
+
 export const removeGroup = (groupId: number) =>
   invoke<void>("remove_group", { groupId });
 
 export const removeImageFromGroup = (groupId: number, imageId: number) =>
   invoke<void>("remove_image_from_group", { groupId, imageId });
+
+export const trashImage = (imageId: number) =>
+  invoke<void>("trash_image", { imageId });
+
+export const getFullImage = (imageId: number) =>
+  invoke<[string, string]>("get_full_image", { imageId });
 
 export const createJob = (payload: {
   imageIds: number[];
@@ -162,6 +171,16 @@ export const getJobs = (params: {
 
 export const retryFailedImages = (jobId: number) =>
   invoke<{ jobId: number }>("retry_failed_images", { jobId });
+
+export interface CleanupResult {
+  checked: number;
+  removed: number;
+  thumbnailsRemoved: number;
+  errors: string[];
+}
+
+export const cleanupStaleImages = () =>
+  invoke<CleanupResult>("cleanup_stale_images");
 
 export const getSettings = () => invoke<AppSettings>("get_settings");
 

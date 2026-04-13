@@ -1,39 +1,98 @@
+import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { getDuplicateClusters, rebuildGroups, setKeeper, dismissCluster, getThumbnail } from "../api/commands";
+import { getDuplicateClusters, rebuildGroups, setKeeper, dismissCluster, getThumbnail, trashImage } from "../api/commands";
 import type { DuplicateCluster, Image } from "../api/commands";
-import { useQuery as useThumbQuery } from "@tanstack/react-query";
 
-function Thumb({ image, isKeeper, onSetKeeper }: {
+function Thumb({ image, isKeeper, onSetKeeper, onTrashed }: {
   image: Image;
   isKeeper: boolean;
   onSetKeeper: () => void;
+  onTrashed: (imageId: number) => void;
 }) {
-  const { data: src } = useThumbQuery({
+  const queryClient = useQueryClient();
+  const [confirmTrash, setConfirmTrash] = useState(false);
+
+  const { data: src } = useQuery({
     queryKey: ["thumbnail", image.id],
     queryFn: () => getThumbnail(image.id),
     staleTime: Infinity,
   });
 
-  const sizeKb = Math.round(image.fileSizeBytes / 1024);
-  const dims = image.widthPx && image.heightPx ? `${image.widthPx}×${image.heightPx}` : "?";
+  const trashMutation = useMutation({
+    mutationFn: () => trashImage(image.id),
+    onSuccess: () => {
+      queryClient.removeQueries({ queryKey: ["thumbnail", image.id] });
+      onTrashed(image.id);
+    },
+  });
+
+  const res = image.widthPx && image.heightPx ? `${image.widthPx}×${image.heightPx}` : null;
+  const sizeMb = (image.fileSizeBytes / 1024 / 1024).toFixed(1);
 
   return (
     <div
-      className={`flex flex-col gap-1 cursor-pointer rounded-lg overflow-hidden border-2 transition-colors ${
+      className={`flex flex-col gap-1 rounded-lg overflow-hidden border-2 transition-colors ${
         isKeeper ? "border-green-500" : "border-transparent hover:border-neutral-600"
       }`}
-      onClick={onSetKeeper}
     >
-      <div className="aspect-square bg-neutral-800 rounded overflow-hidden">
+      {/* Thumbnail with hover actions */}
+      <div
+        className="relative aspect-square bg-neutral-800 rounded overflow-hidden group/thumb cursor-pointer"
+        onClick={() => { if (!confirmTrash) onSetKeeper(); }}
+      >
         {src ? (
           <img src={`data:image/jpeg;base64,${src}`} className="w-full h-full object-cover" />
         ) : (
           <div className="w-full h-full animate-pulse bg-neutral-700" />
         )}
+
+        {/* Resolution badge */}
+        {res && (
+          <span className="absolute bottom-0 inset-x-0 text-center text-[9px] leading-tight py-0.5 bg-black/60 text-neutral-300 truncate">
+            {res}
+          </span>
+        )}
+
+        {/* Trash button — visible on hover */}
+        {!confirmTrash && (
+          <div className="absolute top-1 right-1 opacity-0 group-hover/thumb:opacity-100 transition-opacity">
+            <button
+              onClick={(e) => { e.stopPropagation(); setConfirmTrash(true); }}
+              className="bg-black/70 hover:bg-red-700 text-white rounded text-[10px] px-1 py-0.5 leading-none"
+              title="Move to trash"
+            >
+              🗑
+            </button>
+          </div>
+        )}
+
+        {/* Trash confirmation overlay */}
+        {confirmTrash && (
+          <div className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center gap-1.5 p-1">
+            <span className="text-[10px] text-center text-white leading-tight">Move to trash?</span>
+            <div className="flex gap-1">
+              <button
+                onClick={(e) => { e.stopPropagation(); trashMutation.mutate(); }}
+                disabled={trashMutation.isPending}
+                className="text-[10px] px-1.5 py-0.5 bg-red-600 hover:bg-red-500 rounded text-white disabled:opacity-40"
+              >
+                Yes
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); setConfirmTrash(false); }}
+                className="text-[10px] px-1.5 py-0.5 bg-neutral-700 hover:bg-neutral-600 rounded text-white"
+              >
+                No
+              </button>
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* Info bar */}
       <div className="px-1 pb-1 text-xs text-neutral-400 space-y-0.5">
-        <p className="truncate">{image.fileName}</p>
-        <p>{dims} · {sizeKb}KB</p>
+        <p className="truncate" title={image.fileName}>{image.fileName}</p>
+        <p className="text-neutral-500">{sizeMb} MB</p>
         {isKeeper && <p className="text-green-400 font-medium">Keep</p>}
       </div>
     </div>
@@ -42,12 +101,13 @@ function Thumb({ image, isKeeper, onSetKeeper }: {
 
 function ClusterCard({ cluster }: { cluster: DuplicateCluster }) {
   const queryClient = useQueryClient();
+  const [images, setImages] = useState<Image[]>(cluster.images);
+  const [keeperId, setKeeperId] = useState<number | null>(cluster.suggestedKeeperId);
 
   const keeperMutation = useMutation({
     mutationFn: ({ imageId }: { imageId: number }) =>
       setKeeper(cluster.clusterId, imageId),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: ["duplicate-clusters"] }),
+    onSuccess: (_, { imageId }) => setKeeperId(imageId),
   });
 
   const dismissMutation = useMutation({
@@ -56,26 +116,40 @@ function ClusterCard({ cluster }: { cluster: DuplicateCluster }) {
       queryClient.invalidateQueries({ queryKey: ["duplicate-clusters"] }),
   });
 
+  const handleTrashed = (imageId: number) => {
+    const next = images.filter((img) => img.id !== imageId);
+    setImages(next);
+    if (keeperId === imageId) setKeeperId(null);
+    // If only one image left the cluster is no longer a duplicate — dismiss it
+    if (next.length < 2) {
+      dismissMutation.mutate();
+    }
+  };
+
+  if (images.length < 2) return null;
+
   return (
     <div className="bg-neutral-900 rounded-lg p-4 border border-neutral-800">
       <div className="flex items-center justify-between mb-3">
         <span className="text-sm text-neutral-400">
-          {cluster.images.length} duplicates
+          {images.length} duplicates
         </span>
         <button
           onClick={() => dismissMutation.mutate()}
-          className="text-xs text-neutral-500 hover:text-white transition-colors"
+          disabled={dismissMutation.isPending}
+          className="text-xs text-neutral-500 hover:text-white transition-colors disabled:opacity-40"
         >
           Dismiss
         </button>
       </div>
       <div className="grid grid-cols-4 gap-2">
-        {cluster.images.map((img) => (
+        {images.map((img) => (
           <Thumb
             key={img.id}
             image={img}
-            isKeeper={img.id === cluster.suggestedKeeperId}
+            isKeeper={img.id === keeperId}
             onSetKeeper={() => keeperMutation.mutate({ imageId: img.id })}
+            onTrashed={handleTrashed}
           />
         ))}
       </div>

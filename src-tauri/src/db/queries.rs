@@ -66,6 +66,8 @@ pub async fn get_images_paginated(
         ("file_size", "asc") => "file_size_bytes ASC",
         ("file_size", "desc") => "file_size_bytes DESC",
         ("taken_at", "desc") => "taken_at DESC",
+        ("perceptual_hash", "asc") => "perceptual_hash ASC NULLS LAST",
+        ("perceptual_hash", "desc") => "perceptual_hash DESC NULLS LAST",
         _ => "taken_at ASC",
     };
 
@@ -110,6 +112,40 @@ pub async fn get_images_paginated(
     };
 
     Ok((images, total))
+}
+
+pub async fn get_all_image_paths(pool: &SqlitePool) -> Result<Vec<(i64, String)>> {
+    // Use query_as with DbImage to avoid sqlx inferring id as Option<i64>
+    let rows: Vec<DbImage> = sqlx::query_as("SELECT * FROM images")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows.into_iter().map(|r| (r.id, r.file_path)).collect())
+}
+
+pub async fn update_image_path(pool: &SqlitePool, id: i64, new_path: &str) -> Result<()> {
+    let now = chrono::Utc::now().timestamp();
+    let file_name = std::path::Path::new(new_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string();
+    sqlx::query!(
+        "UPDATE images SET file_path = ?, file_name = ?, updated_at = ? WHERE id = ?",
+        new_path,
+        file_name,
+        now,
+        id
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn delete_image(pool: &SqlitePool, id: i64) -> Result<()> {
+    sqlx::query!("DELETE FROM images WHERE id = ?", id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 pub async fn get_image_by_id(pool: &SqlitePool, id: i64) -> Result<Option<DbImage>> {
@@ -281,6 +317,25 @@ pub async fn get_duplicate_cluster_members(
         .into_iter()
         .map(|r| (r.group_id, r.image_id, r.is_keeper as i64, r.resolution))
         .collect())
+}
+
+pub async fn get_group_image_paths(
+    pool: &SqlitePool,
+    group_id: i64,
+) -> Result<Vec<(i64, String)>> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT i.id, i.file_path
+        FROM images i
+        JOIN group_members gm ON gm.image_id = i.id
+        WHERE gm.group_id = ?
+        ORDER BY i.taken_at ASC, i.file_name ASC
+        "#,
+        group_id
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().filter_map(|r| r.id.map(|id| (id, r.file_path))).collect())
 }
 
 // ── Jobs ─────────────────────────────────────────────────────────────────────

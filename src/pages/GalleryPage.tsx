@@ -1,21 +1,98 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { getGroups, rebuildGroups, getThumbnail, getImages, removeGroup, removeImageFromGroup } from "../api/commands";
+import { getGroups, rebuildGroups, getThumbnail, getImages, removeGroup, removeImageFromGroup, trashImage, getFullImage, exportGroup, openFolderDialog } from "../api/commands";
 import type { Group, Image } from "../api/commands";
 
 type Granularity = "day" | "month" | "year";
+
+// ── Lightbox ──────────────────────────────────────────────────────────────────
+
+function Lightbox({ image, onClose }: { image: Image; onClose: () => void }) {
+  const { data, isFetching } = useQuery({
+    queryKey: ["full-image", image.id],
+    queryFn: () => getFullImage(image.id),
+    staleTime: Infinity,
+  });
+
+  // Close on Escape
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
+
+  const src = data ? `data:${data[1]};base64,${data[0]}` : null;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/90 flex flex-col items-center justify-center"
+      onClick={onClose}
+    >
+      {/* Close button */}
+      <button
+        className="absolute top-4 right-4 text-white/70 hover:text-white text-2xl leading-none"
+        onClick={onClose}
+      >
+        ✕
+      </button>
+
+      {/* Image */}
+      <div
+        className="relative max-w-[90vw] max-h-[85vh] flex items-center justify-center"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {isFetching && (
+          <div className="w-32 h-32 flex items-center justify-center">
+            <div className="w-8 h-8 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+          </div>
+        )}
+        {src && (
+          <img
+            src={src}
+            className="max-w-[90vw] max-h-[85vh] object-contain rounded shadow-2xl"
+          />
+        )}
+      </div>
+
+      {/* Metadata bar */}
+      <div
+        className="absolute bottom-0 inset-x-0 px-6 py-3 bg-black/60 flex items-center gap-4 text-xs text-neutral-300"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <span className="truncate text-neutral-400 max-w-xs" title={image.filePath}>
+          {image.fileName}
+        </span>
+        {image.widthPx && image.heightPx && (
+          <span className="shrink-0">{image.widthPx} × {image.heightPx}</span>
+        )}
+        {image.fileSizeBytes && (
+          <span className="shrink-0">{(image.fileSizeBytes / 1024 / 1024).toFixed(1)} MB</span>
+        )}
+        {image.cameraMake && (
+          <span className="shrink-0 text-neutral-500">{image.cameraMake} {image.cameraModel}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+type ImageAction = "remove" | "trash";
 
 function ImageThumb({
   image,
   groupId,
   onRemoved,
+  onTrashed,
+  onOpen,
 }: {
   image: Image;
   groupId: number;
   onRemoved: (imageId: number) => void;
+  onTrashed: (imageId: number) => void;
+  onOpen: (image: Image) => void;
 }) {
   const queryClient = useQueryClient();
-  const [confirmRemove, setConfirmRemove] = useState(false);
+  const [confirm, setConfirm] = useState<ImageAction | null>(null);
 
   const { data: src } = useQuery({
     queryKey: ["thumbnail", image.id],
@@ -31,6 +108,17 @@ function ImageThumb({
     },
   });
 
+  const trashMutation = useMutation({
+    mutationFn: () => trashImage(image.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["groups"] });
+      queryClient.removeQueries({ queryKey: ["thumbnail", image.id] });
+      onTrashed(image.id);
+    },
+  });
+
+  const isPending = removeMutation.isPending || trashMutation.isPending;
+
   const res =
     image.widthPx && image.heightPx
       ? `${image.widthPx}×${image.heightPx}`
@@ -41,8 +129,9 @@ function ImageThumb({
       {src ? (
         <img
           src={`data:image/jpeg;base64,${src}`}
-          className="w-full h-full object-cover"
+          className="w-full h-full object-cover cursor-pointer"
           loading="lazy"
+          onClick={() => onOpen(image)}
         />
       ) : (
         <div className="w-full h-full animate-pulse bg-neutral-700" />
@@ -52,30 +141,48 @@ function ImageThumb({
           {res}
         </span>
       )}
-      {/* Remove button — visible on hover */}
-      {!confirmRemove && (
-        <button
-          onClick={(e) => { e.stopPropagation(); setConfirmRemove(true); }}
-          className="absolute top-1 right-1 opacity-0 group-hover/thumb:opacity-100 transition-opacity bg-black/70 hover:bg-red-700 text-white rounded text-[10px] px-1 py-0.5 leading-none"
-          title="Remove from group"
-        >
-          ✕
-        </button>
+      {/* Action buttons — visible on hover */}
+      {!confirm && (
+        <div className="absolute top-1 right-1 flex gap-0.5 opacity-0 group-hover/thumb:opacity-100 transition-opacity">
+          <button
+            onClick={(e) => { e.stopPropagation(); setConfirm("remove"); }}
+            className="bg-black/70 hover:bg-neutral-600 text-white rounded text-[10px] px-1 py-0.5 leading-none"
+            title="Remove from group"
+          >
+            ✕
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); setConfirm("trash"); }}
+            className="bg-black/70 hover:bg-red-700 text-white rounded text-[10px] px-1 py-0.5 leading-none"
+            title="Move to trash"
+          >
+            🗑
+          </button>
+        </div>
       )}
-      {confirmRemove && (
-        <div className="absolute inset-0 bg-black/75 flex flex-col items-center justify-center gap-1 p-1">
-          <span className="text-[10px] text-center text-white">Remove?</span>
+      {confirm && (
+        <div className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center gap-1.5 p-1">
+          <span className="text-[10px] text-center text-white leading-tight">
+            {confirm === "trash" ? "Move to trash?" : "Remove from group?"}
+          </span>
           <div className="flex gap-1">
             <button
-              onClick={(e) => { e.stopPropagation(); removeMutation.mutate(); }}
-              disabled={removeMutation.isPending}
-              className="text-[10px] px-1.5 py-0.5 bg-red-600 hover:bg-red-500 rounded text-white disabled:opacity-40"
+              onClick={(e) => {
+                e.stopPropagation();
+                confirm === "trash" ? trashMutation.mutate() : removeMutation.mutate();
+              }}
+              disabled={isPending}
+              className={`text-[10px] px-1.5 py-0.5 rounded text-white disabled:opacity-40 ${
+                confirm === "trash"
+                  ? "bg-red-600 hover:bg-red-500"
+                  : "bg-neutral-600 hover:bg-neutral-500"
+              }`}
             >
               Yes
             </button>
             <button
-              onClick={(e) => { e.stopPropagation(); setConfirmRemove(false); }}
-              className="text-[10px] px-1.5 py-0.5 bg-neutral-600 hover:bg-neutral-500 rounded text-white"
+              onClick={(e) => { e.stopPropagation(); setConfirm(null); }}
+              className="text-[10px] px-1.5 py-0.5 bg-neutral-700 hover:bg-neutral-600 rounded text-white"
             >
               No
             </button>
@@ -88,17 +195,35 @@ function ImageThumb({
 
 const PAGE_SIZE = 20;
 
-function GroupCard({ group, onRemoved }: { group: Group; onRemoved: (groupId: number) => void }) {
+type SortBy = "taken_at" | "perceptual_hash" | "file_name" | "file_size";
+
+const SORT_LABELS: Record<SortBy, string> = {
+  taken_at: "Date",
+  perceptual_hash: "Similarity",
+  file_name: "Name",
+  file_size: "Size",
+};
+
+function GroupCard({ group, onRemoved, onOpenImage }: { group: Group; onRemoved: (groupId: number) => void; onOpenImage: (image: Image) => void }) {
   const [expanded, setExpanded] = useState(false);
   const [page, setPage] = useState(0);
   const [allImages, setAllImages] = useState<Image[]>([]);
-  const [total, setTotal] = useState<number>(group.imageCount ?? 0);
+  // serverTotal: last total reported by the server (updated on each page fetch)
+  // removedCount: how many images have been removed/trashed locally since last reset
+  const [serverTotal, setServerTotal] = useState<number>(group.imageCount ?? 0);
+  const [removedCount, setRemovedCount] = useState(0);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const [showExport, setShowExport] = useState(false);
+  const [exportDir, setExportDir] = useState("");
+  const [moveFiles, setMoveFiles] = useState(false);
+  const [sortBy, setSortBy] = useState<SortBy>("taken_at");
   const queryClient = useQueryClient();
 
+  const total = serverTotal - removedCount;
+
   const { data: pageData, isFetching } = useQuery({
-    queryKey: ["images", group.id, page],
-    queryFn: () => getImages({ groupId: group.id, page, pageSize: PAGE_SIZE }),
+    queryKey: ["images", group.id, page, sortBy],
+    queryFn: () => getImages({ groupId: group.id, page, pageSize: PAGE_SIZE, sortBy }),
     enabled: expanded,
     staleTime: Infinity,
   });
@@ -110,8 +235,18 @@ function GroupCard({ group, onRemoved }: { group: Group; onRemoved: (groupId: nu
       const newItems = pageData.items.filter((img) => !existingIds.has(img.id));
       return newItems.length > 0 ? [...prev, ...newItems] : prev;
     });
-    setTotal(pageData.total);
+    // Server gave us a fresh total — reset the adjustment counter since the
+    // server total now reflects any removals that were persisted.
+    setServerTotal(pageData.total);
+    setRemovedCount(0);
   }, [pageData]);
+
+  // Reset accumulated images when sort changes
+  useEffect(() => {
+    setAllImages([]);
+    setPage(0);
+    setRemovedCount(0);
+  }, [sortBy]);
 
   const removeGroupMutation = useMutation({
     mutationFn: () => removeGroup(group.id),
@@ -121,9 +256,22 @@ function GroupCard({ group, onRemoved }: { group: Group; onRemoved: (groupId: nu
     },
   });
 
+  const exportMutation = useMutation({
+    mutationFn: () => exportGroup(group.id, exportDir, moveFiles),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      setShowExport(false);
+    },
+  });
+
   const handleImageRemoved = (imageId: number) => {
     setAllImages((prev) => prev.filter((img) => img.id !== imageId));
-    setTotal((t) => t - 1);
+    setRemovedCount((c) => c + 1);
+  };
+
+  const handleImageTrashed = (imageId: number) => {
+    setAllImages((prev) => prev.filter((img) => img.id !== imageId));
+    setRemovedCount((c) => c + 1);
   };
 
   const hasMore = allImages.length < total;
@@ -143,10 +291,18 @@ function GroupCard({ group, onRemoved }: { group: Group; onRemoved: (groupId: nu
           </div>
           <span className="text-neutral-500 text-xs">{expanded ? "▲" : "▼"}</span>
         </button>
+        {/* Export button */}
+        <button
+          onClick={() => { setShowExport((v) => !v); setConfirmRemove(false); }}
+          className={`px-3 py-3 text-xs transition-colors ${showExport ? "text-blue-400" : "text-neutral-500 hover:text-blue-400"}`}
+          title="Export group to folder"
+        >
+          ↗
+        </button>
         {/* Group-level remove */}
         {!confirmRemove ? (
           <button
-            onClick={() => setConfirmRemove(true)}
+            onClick={() => { setConfirmRemove(true); setShowExport(false); }}
             className="px-3 py-3 text-neutral-500 hover:text-red-400 transition-colors text-sm"
             title="Remove group"
           >
@@ -171,8 +327,83 @@ function GroupCard({ group, onRemoved }: { group: Group; onRemoved: (groupId: nu
           </div>
         )}
       </div>
+      {showExport && (
+        <div className="px-4 py-3 border-t border-neutral-800 bg-neutral-950 flex flex-col gap-3">
+          <p className="text-xs font-medium text-neutral-300">
+            Export <span className="text-blue-400">{group.label}</span> to folder
+          </p>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={exportDir}
+              readOnly
+              placeholder="Select output folder…"
+              className="flex-1 bg-neutral-800 border border-neutral-700 rounded px-2 py-1.5 text-xs text-neutral-200 placeholder-neutral-500 cursor-pointer"
+              onClick={async () => {
+                const path = await openFolderDialog();
+                if (path) setExportDir(path);
+              }}
+            />
+            <button
+              onClick={async () => {
+                const path = await openFolderDialog();
+                if (path) setExportDir(path);
+              }}
+              className="px-3 py-1.5 text-xs bg-neutral-700 hover:bg-neutral-600 rounded transition-colors"
+            >
+              Browse
+            </button>
+          </div>
+          <label className="flex items-center gap-2 text-xs text-neutral-400 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={moveFiles}
+              onChange={(e) => setMoveFiles(e.target.checked)}
+              className="accent-blue-500"
+            />
+            Move files (remove from original location)
+          </label>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => exportMutation.mutate()}
+              disabled={!exportDir || exportMutation.isPending}
+              className="px-3 py-1.5 text-xs bg-blue-600 hover:bg-blue-500 rounded text-white disabled:opacity-40 transition-colors"
+            >
+              {exportMutation.isPending ? "Exporting…" : `${moveFiles ? "Move" : "Copy"} ${total} images`}
+            </button>
+            <button
+              onClick={() => setShowExport(false)}
+              className="px-3 py-1.5 text-xs bg-neutral-700 hover:bg-neutral-600 rounded transition-colors"
+            >
+              Cancel
+            </button>
+            {exportMutation.isSuccess && (
+              <span className="text-xs text-green-400">Done — check Jobs page for progress</span>
+            )}
+            {exportMutation.isError && (
+              <span className="text-xs text-red-400">{String(exportMutation.error)}</span>
+            )}
+          </div>
+        </div>
+      )}
       {expanded && (
         <div className="p-3">
+          <div className="flex items-center gap-1.5 mb-2">
+            <span className="text-[11px] text-neutral-500">Sort:</span>
+            {(Object.keys(SORT_LABELS) as SortBy[]).map((s) => (
+              <button
+                key={s}
+                onClick={() => setSortBy(s)}
+                className={`text-[11px] px-2 py-0.5 rounded transition-colors ${
+                  sortBy === s
+                    ? "bg-blue-600 text-white"
+                    : "bg-neutral-800 text-neutral-400 hover:text-white"
+                }`}
+              >
+                {SORT_LABELS[s]}
+              </button>
+            ))}
+          </div>
           <div className="grid grid-cols-6 gap-1.5">
             {allImages.map((img) => (
               <ImageThumb
@@ -180,6 +411,8 @@ function GroupCard({ group, onRemoved }: { group: Group; onRemoved: (groupId: nu
                 image={img}
                 groupId={group.id}
                 onRemoved={handleImageRemoved}
+                onTrashed={handleImageTrashed}
+                onOpen={onOpenImage}
               />
             ))}
           </div>
@@ -200,6 +433,7 @@ function GroupCard({ group, onRemoved }: { group: Group; onRemoved: (groupId: nu
 
 export default function GalleryPage() {
   const [granularity, setGranularity] = useState<Granularity>("day");
+  const [lightboxImage, setLightboxImage] = useState<Image | null>(null);
   const queryClient = useQueryClient();
 
   const { data: groups, isLoading } = useQuery({
@@ -221,8 +455,15 @@ export default function GalleryPage() {
     setRemovedGroupIds((prev) => new Set(prev).add(groupId));
   };
 
+  const handleOpenImage = useCallback((image: Image) => {
+    setLightboxImage(image);
+  }, []);
+
   return (
     <div className="flex flex-col gap-4">
+      {lightboxImage && (
+        <Lightbox image={lightboxImage} onClose={() => setLightboxImage(null)} />
+      )}
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold">Gallery</h1>
         <div className="flex items-center gap-3">
@@ -260,7 +501,7 @@ export default function GalleryPage() {
 
       <div className="flex flex-col gap-2">
         {visibleGroups?.map((g) => (
-          <GroupCard key={g.id} group={g} onRemoved={handleGroupRemoved} />
+          <GroupCard key={g.id} group={g} onRemoved={handleGroupRemoved} onOpenImage={handleOpenImage} />
         ))}
       </div>
     </div>

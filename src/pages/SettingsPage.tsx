@@ -1,10 +1,22 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { getSettings, updateSettings, openFolderDialog } from "../api/commands";
-import type { AppSettings } from "../api/commands";
+import { getSettings, updateSettings, openFolderDialog, cleanupStaleImages } from "../api/commands";
+import type { AppSettings, CleanupResult } from "../api/commands";
 import { useState, useEffect } from "react";
 
 export default function SettingsPage() {
   const queryClient = useQueryClient();
+  const [cleanupResult, setCleanupResult] = useState<CleanupResult | null>(null);
+
+  const cleanup = useMutation({
+    mutationFn: cleanupStaleImages,
+    onSuccess: (result) => {
+      setCleanupResult(result);
+      // Invalidate groups and images since stale records are now gone
+      queryClient.invalidateQueries({ queryKey: ["groups"] });
+      queryClient.invalidateQueries({ queryKey: ["images"] });
+    },
+  });
+
   const { data: settings } = useQuery({
     queryKey: ["settings"],
     queryFn: getSettings,
@@ -137,6 +149,44 @@ export default function SettingsPage() {
       >
         {save.isPending ? "Saving…" : "Save Settings"}
       </button>
+
+      <section className="bg-neutral-900 rounded-lg p-4 border border-neutral-800 flex flex-col gap-4">
+        <div>
+          <h2 className="text-sm font-semibold">Database Maintenance</h2>
+          <p className="text-xs text-neutral-500 mt-1">
+            Scan all image records and remove any whose file no longer exists on disk.
+            Also cleans up their cached thumbnails.
+          </p>
+        </div>
+
+        <div className="flex items-center gap-4">
+          <button
+            onClick={() => { setCleanupResult(null); cleanup.mutate(); }}
+            disabled={cleanup.isPending}
+            className="px-4 py-2 bg-neutral-700 hover:bg-neutral-600 disabled:opacity-40 rounded-lg text-sm transition-colors"
+          >
+            {cleanup.isPending ? "Scanning…" : "Clean Up Stale Images"}
+          </button>
+
+          {cleanupResult && !cleanup.isPending && (
+            <div className="text-xs text-neutral-400 flex flex-col gap-0.5">
+              {cleanupResult.removed === 0 ? (
+                <span className="text-green-400">
+                  All {cleanupResult.checked} records are valid — nothing to clean up.
+                </span>
+              ) : (
+                <span className="text-yellow-400">
+                  Checked {cleanupResult.checked} · Removed {cleanupResult.removed} records
+                  {cleanupResult.thumbnailsRemoved > 0 && ` · ${cleanupResult.thumbnailsRemoved} thumbnails deleted`}
+                </span>
+              )}
+              {cleanupResult.errors.length > 0 && (
+                <span className="text-red-400">{cleanupResult.errors.length} error(s) — check console</span>
+              )}
+            </div>
+          )}
+        </div>
+      </section>
     </div>
   );
 }
