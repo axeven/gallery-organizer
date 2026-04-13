@@ -35,9 +35,10 @@ pub async fn scan_folder(
     let pool = state.db.clone();
     let cancelled = Arc::new(AtomicBool::new(false));
     let cancelled_clone = cancelled.clone();
+    let processing_threads = state.settings.read().unwrap().processing_threads;
 
     let handle = tokio::spawn(async move {
-        crate::scanner::scan_dir(app, pool, folder_path, recursive, cancelled_clone).await;
+        crate::scanner::scan_dir(app, pool, folder_path, recursive, cancelled_clone, processing_threads).await;
     });
 
     {

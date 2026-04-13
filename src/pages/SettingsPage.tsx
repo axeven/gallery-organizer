@@ -106,6 +106,26 @@ export default function SettingsPage() {
             className="accent-blue-500"
           />
         </div>
+
+        <div className="flex flex-col gap-1">
+          <label className="text-xs text-neutral-400">
+            Processing Threads:{" "}
+            <span className="text-neutral-200">
+              {(merged.processingThreads ?? 0) === 0 ? "Auto" : merged.processingThreads}
+            </span>
+          </label>
+          <input
+            type="range"
+            min={0}
+            max={16}
+            value={merged.processingThreads ?? 0}
+            onChange={(e) => setDraft((d) => ({ ...d, processingThreads: Number(e.target.value) }))}
+            className="accent-blue-500"
+          />
+          <p className="text-xs text-neutral-600">
+            Auto = all CPUs minus one. Lower values keep the PC responsive while jobs run.
+          </p>
+        </div>
       </section>
 
       <section className="bg-neutral-900 rounded-lg p-4 border border-neutral-800 flex flex-col gap-4">

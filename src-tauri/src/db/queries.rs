@@ -308,11 +308,29 @@ pub async fn dismiss_cluster(pool: &SqlitePool, group_id: i64) -> Result<()> {
     Ok(())
 }
 
-pub async fn remove_group(pool: &SqlitePool, group_id: i64) -> Result<()> {
+/// Returns the image IDs that were members of this group before deletion.
+pub async fn remove_group(pool: &SqlitePool, group_id: i64) -> Result<Vec<i64>> {
+    // Collect image IDs before deleting
+    let image_ids: Vec<i64> = sqlx::query_scalar!(
+        "SELECT image_id FROM group_members WHERE group_id = ?",
+        group_id
+    )
+    .fetch_all(pool)
+    .await?;
+
+    // Delete image records (cascades to group_members via image_id FK)
+    for &id in &image_ids {
+        sqlx::query!("DELETE FROM images WHERE id = ?", id)
+            .execute(pool)
+            .await?;
+    }
+
+    // Delete the group itself (group_members already gone via cascade)
     sqlx::query!("DELETE FROM groups WHERE id = ?", group_id)
         .execute(pool)
         .await?;
-    Ok(())
+
+    Ok(image_ids)
 }
 
 pub async fn remove_image_from_group(
@@ -330,27 +348,56 @@ pub async fn remove_image_from_group(
     Ok(())
 }
 
+pub struct DuplicateClusterRow {
+    pub group_id: i64,
+    pub is_keeper: i64,
+    pub image: DbImage,
+}
+
 pub async fn get_duplicate_cluster_members(
     pool: &SqlitePool,
-) -> Result<Vec<(i64, i64, i64, i64)>> {
-    // Returns (group_id, image_id, is_keeper, width_px * height_px as resolution)
-    let rows = sqlx::query!(
+) -> Result<Vec<DuplicateClusterRow>> {
+    // Single JOIN query — avoids N+1 by fetching full image data with cluster info.
+    // sqlx infers i.id as Option<i64> on JOINs, so we use filter_map below.
+    let raw = sqlx::query!(
         r#"
-        SELECT gm.group_id, gm.image_id, gm.is_keeper,
-               COALESCE(i.width_px * i.height_px, 0) AS resolution
+        SELECT gm.group_id, gm.is_keeper,
+               i.id, i.file_path, i.file_name, i.file_size_bytes,
+               i.width_px, i.height_px, i.format,
+               i.taken_at, i.taken_at_source, i.camera_make, i.camera_model,
+               i.perceptual_hash, i.scanned_at, i.updated_at
         FROM group_members gm
         JOIN groups g ON g.id = gm.group_id
         JOIN images i ON i.id = gm.image_id
         WHERE g.group_type = 'duplicate_cluster'
-        ORDER BY gm.group_id, resolution DESC
+        ORDER BY gm.group_id, COALESCE(i.width_px * i.height_px, 0) DESC
         "#
     )
     .fetch_all(pool)
     .await?;
 
-    Ok(rows
+    Ok(raw
         .into_iter()
-        .map(|r| (r.group_id, r.image_id, r.is_keeper as i64, r.resolution))
+        .map(|r| DuplicateClusterRow {
+            group_id: r.group_id,
+            is_keeper: r.is_keeper as i64,
+            image: DbImage {
+                id: r.id,
+                file_path: r.file_path,
+                file_name: r.file_name,
+                file_size_bytes: r.file_size_bytes,
+                width_px: r.width_px,
+                height_px: r.height_px,
+                format: r.format,
+                taken_at: r.taken_at,
+                taken_at_source: r.taken_at_source,
+                camera_make: r.camera_make,
+                camera_model: r.camera_model,
+                perceptual_hash: r.perceptual_hash,
+                scanned_at: r.scanned_at,
+                updated_at: r.updated_at,
+            },
+        })
         .collect())
 }
 

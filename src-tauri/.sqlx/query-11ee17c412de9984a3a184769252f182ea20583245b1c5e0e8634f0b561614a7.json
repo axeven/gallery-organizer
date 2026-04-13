@@ -1,0 +1,110 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        SELECT gm.group_id, gm.is_keeper,\n               i.id, i.file_path, i.file_name, i.file_size_bytes,\n               i.width_px, i.height_px, i.format,\n               i.taken_at, i.taken_at_source, i.camera_make, i.camera_model,\n               i.perceptual_hash, i.scanned_at, i.updated_at\n        FROM group_members gm\n        JOIN groups g ON g.id = gm.group_id\n        JOIN images i ON i.id = gm.image_id\n        WHERE g.group_type = 'duplicate_cluster'\n        ORDER BY gm.group_id, COALESCE(i.width_px * i.height_px, 0) DESC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "group_id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "is_keeper",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "id",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "file_path",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "file_name",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "file_size_bytes",
+        "ordinal": 5,
+        "type_info": "Integer"
+      },
+      {
+        "name": "width_px",
+        "ordinal": 6,
+        "type_info": "Integer"
+      },
+      {
+        "name": "height_px",
+        "ordinal": 7,
+        "type_info": "Integer"
+      },
+      {
+        "name": "format",
+        "ordinal": 8,
+        "type_info": "Text"
+      },
+      {
+        "name": "taken_at",
+        "ordinal": 9,
+        "type_info": "Integer"
+      },
+      {
+        "name": "taken_at_source",
+        "ordinal": 10,
+        "type_info": "Text"
+      },
+      {
+        "name": "camera_make",
+        "ordinal": 11,
+        "type_info": "Text"
+      },
+      {
+        "name": "camera_model",
+        "ordinal": 12,
+        "type_info": "Text"
+      },
+      {
+        "name": "perceptual_hash",
+        "ordinal": 13,
+        "type_info": "Text"
+      },
+      {
+        "name": "scanned_at",
+        "ordinal": 14,
+        "type_info": "Integer"
+      },
+      {
+        "name": "updated_at",
+        "ordinal": 15,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "11ee17c412de9984a3a184769252f182ea20583245b1c5e0e8634f0b561614a7"
+}

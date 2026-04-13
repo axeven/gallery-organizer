@@ -1,5 +1,6 @@
 pub mod date_grouper;
 pub mod dupe_grouper;
+pub mod size_grouper;
 
 use anyhow::Result;
 use sqlx::SqlitePool;
@@ -18,9 +19,13 @@ pub async fn rebuild_groups(
         "duplicates" => {
             total += dupe_grouper::rebuild(pool, dupe_threshold).await?;
         }
+        "size" => {
+            total += size_grouper::rebuild(pool).await?;
+        }
         "all" => {
             total += date_grouper::rebuild(pool).await?;
             total += dupe_grouper::rebuild(pool, dupe_threshold).await?;
+            total += size_grouper::rebuild(pool).await?;
         }
         _ => {}
     }

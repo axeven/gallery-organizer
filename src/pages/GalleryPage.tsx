@@ -742,18 +742,23 @@ function GroupCard({ group, onRemoved, onOpenImage }: { group: Group; onRemoved:
   );
 }
 
+type GroupBy = "date" | "size";
+
 export default function GalleryPage() {
+  const [groupBy, setGroupBy] = useState<GroupBy>("date");
   const [granularity, setGranularity] = useState<Granularity>("day");
   const [lightboxImage, setLightboxImage] = useState<Image | null>(null);
   const queryClient = useQueryClient();
 
+  const groupType = groupBy === "size" ? "size" : `date_${granularity}`;
+
   const { data: groups, isLoading } = useQuery({
-    queryKey: ["groups", `date_${granularity}`],
-    queryFn: () => getGroups(`date_${granularity}`),
+    queryKey: ["groups", groupType],
+    queryFn: () => getGroups(groupType),
   });
 
   const rebuild = useMutation({
-    mutationFn: () => rebuildGroups("date"),
+    mutationFn: () => rebuildGroups(groupBy),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["groups"] }),
   });
 
@@ -778,13 +783,14 @@ export default function GalleryPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold">Gallery</h1>
         <div className="flex items-center gap-3">
+          {/* Group-by selector */}
           <div className="flex rounded-lg overflow-hidden border border-neutral-700 text-xs">
-            {(["day", "month", "year"] as Granularity[]).map((g) => (
+            {(["date", "size"] as GroupBy[]).map((g) => (
               <button
                 key={g}
-                onClick={() => setGranularity(g)}
+                onClick={() => setGroupBy(g)}
                 className={`px-3 py-1.5 capitalize transition-colors ${
-                  granularity === g
+                  groupBy === g
                     ? "bg-blue-600 text-white"
                     : "bg-neutral-800 text-neutral-400 hover:text-white"
                 }`}
@@ -793,6 +799,26 @@ export default function GalleryPage() {
               </button>
             ))}
           </div>
+
+          {/* Date granularity sub-selector — only shown in date mode */}
+          {groupBy === "date" && (
+            <div className="flex rounded-lg overflow-hidden border border-neutral-700 text-xs">
+              {(["day", "month", "year"] as Granularity[]).map((g) => (
+                <button
+                  key={g}
+                  onClick={() => setGranularity(g)}
+                  className={`px-3 py-1.5 capitalize transition-colors ${
+                    granularity === g
+                      ? "bg-neutral-600 text-white"
+                      : "bg-neutral-800 text-neutral-400 hover:text-white"
+                  }`}
+                >
+                  {g}
+                </button>
+              ))}
+            </div>
+          )}
+
           <button
             onClick={() => rebuild.mutate()}
             disabled={rebuild.isPending}

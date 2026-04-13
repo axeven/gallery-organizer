@@ -35,6 +35,7 @@ pub async fn scan_dir(
     folder_path: String,
     recursive: bool,
     cancelled: Arc<AtomicBool>,
+    processing_threads: u32,
 ) -> ScanResult {
     let start = Instant::now();
 
@@ -69,8 +70,12 @@ pub async fn scan_dir(
     // Phase 2: process images in rayon, send DB writes through a channel
     // to avoid calling async code from rayon threads.
     //
-    // Cap threads at (num_cpus - 1) so the system stays responsive.
-    let num_threads = (num_cpus::get().saturating_sub(1)).max(1);
+    // Use the user-configured thread limit, or default to (num_cpus - 1).
+    let num_threads = if processing_threads > 0 {
+        processing_threads as usize
+    } else {
+        (num_cpus::get().saturating_sub(1)).max(1)
+    };
     let pool_rayon = rayon::ThreadPoolBuilder::new()
         .num_threads(num_threads)
         .build()

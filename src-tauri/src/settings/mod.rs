@@ -15,6 +15,8 @@ pub struct AppSettings {
     pub date_group_granularity: String,
     pub thumbnail_size_px: u32,
     pub scan_recursive: bool,
+    /// Max rayon threads for image processing jobs. 0 = auto (num_cpus - 1).
+    pub processing_threads: u32,
 }
 
 impl Default for AppSettings {
@@ -28,6 +30,7 @@ impl Default for AppSettings {
             date_group_granularity: "day".into(),
             thumbnail_size_px: 256,
             scan_recursive: true,
+            processing_threads: 0,
         }
     }
 }
@@ -65,6 +68,10 @@ pub async fn load_all(pool: &SqlitePool) -> Result<AppSettings> {
         .and_then(|v| serde_json::from_str::<bool>(&v).ok())
         .unwrap_or(true);
 
+    let processing_threads = queries::get_setting(pool, "processing_threads").await?
+        .and_then(|v| serde_json::from_str::<u32>(&v).ok())
+        .unwrap_or(0);
+
     Ok(AppSettings {
         output_mode,
         output_dir,
@@ -74,6 +81,7 @@ pub async fn load_all(pool: &SqlitePool) -> Result<AppSettings> {
         date_group_granularity,
         thumbnail_size_px,
         scan_recursive,
+        processing_threads,
     })
 }
 
@@ -86,5 +94,6 @@ pub async fn save(pool: &SqlitePool, s: &AppSettings) -> Result<()> {
     queries::set_setting(pool, "date_group_granularity", &serde_json::to_string(&s.date_group_granularity)?).await?;
     queries::set_setting(pool, "thumbnail_size_px", &serde_json::to_string(&s.thumbnail_size_px)?).await?;
     queries::set_setting(pool, "scan_recursive", &serde_json::to_string(&s.scan_recursive)?).await?;
+    queries::set_setting(pool, "processing_threads", &serde_json::to_string(&s.processing_threads)?).await?;
     Ok(())
 }

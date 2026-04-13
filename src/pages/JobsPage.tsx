@@ -1,12 +1,30 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { getJobs, createJob, startJob, cancelJob, deleteJob, retryFailedImages, getImages } from "../api/commands";
 import { useJobStore } from "../store/jobStore";
 import type { ProcessingJob } from "../api/commands";
 
+function useTick(active: boolean) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [active]);
+  return now;
+}
+
+function formatDuration(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return s > 0 ? `${m}m ${s}s` : `${m}m`;
+}
+
 function JobItem({ job }: { job: ProcessingJob }) {
   const queryClient = useQueryClient();
   const progress = useJobStore((s) => s.activeJobProgress[job.id]);
+  const now = useTick(job.status === "running");
 
   const displayed = progress ?? {
     processed: job.processedCount + job.failedCount,
@@ -16,6 +34,16 @@ function JobItem({ job }: { job: ProcessingJob }) {
   const pct = displayed.total > 0
     ? Math.round((displayed.processed / displayed.total) * 100)
     : 0;
+
+  // Timing
+  const startSec = job.startedAt ?? null;
+  const endSec = job.finishedAt ?? null;
+  const elapsedSec = startSec
+    ? Math.max(1, Math.round((endSec ? endSec * 1000 : now) / 1000) - startSec)
+    : null;
+  const throughput = elapsedSec && displayed.processed > 0
+    ? (displayed.processed / elapsedSec).toFixed(1)
+    : null;
 
   const cancel = useMutation({
     mutationFn: async () => {
@@ -92,9 +120,17 @@ function JobItem({ job }: { job: ProcessingJob }) {
           style={{ width: `${pct}%` }}
         />
       </div>
-      <p className="text-xs text-neutral-500">
-        {displayed.processed} / {displayed.total} images
-      </p>
+      <div className="flex items-center justify-between text-xs text-neutral-500">
+        <span>{displayed.processed} / {displayed.total} images</span>
+        <span className="flex gap-2">
+          {elapsedSec !== null && (
+            <span>{formatDuration(elapsedSec)}</span>
+          )}
+          {throughput !== null && (
+            <span>{throughput} img/s</span>
+          )}
+        </span>
+      </div>
     </div>
   );
 }

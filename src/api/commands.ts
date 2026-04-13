@@ -63,6 +63,8 @@ export interface AppSettings {
   dateGroupGranularity: "day" | "month" | "year";
   thumbnailSizePx: number;
   scanRecursive: boolean;
+  /** Max parallel threads for processing jobs. 0 = auto (num_cpus - 1). */
+  processingThreads: number;
 }
 
 export type ResizeMode =
@@ -145,7 +147,7 @@ export const getThumbnail = (imageId: number) =>
 export const getGroups = (groupType?: string) =>
   invoke<Group[]>("get_groups", { groupType });
 
-export const rebuildGroups = (groupType: "date" | "duplicates" | "all") =>
+export const rebuildGroups = (groupType: "date" | "duplicates" | "size" | "all") =>
   invoke<{ groupsCreated: number; durationMs: number }>("rebuild_groups", { groupType });
 
 export const getDuplicateClusters = () =>

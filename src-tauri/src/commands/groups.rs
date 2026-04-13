@@ -67,31 +67,26 @@ pub async fn get_duplicate_clusters(
         .await
         .map_err(|e| e.to_string())?;
 
-    let mut cluster_map: std::collections::HashMap<i64, (Vec<i64>, Option<i64>)> =
+    // Group rows by cluster in one pass — no additional DB queries needed.
+    let mut cluster_map: std::collections::HashMap<i64, (Vec<DbImage>, Option<i64>)> =
         std::collections::HashMap::new();
 
-    for (group_id, image_id, is_keeper, _resolution) in rows {
-        let entry = cluster_map.entry(group_id).or_default();
-        entry.0.push(image_id);
-        if is_keeper == 1 {
-            entry.1 = Some(image_id);
+    for row in rows {
+        let entry = cluster_map.entry(row.group_id).or_default();
+        if row.is_keeper == 1 {
+            entry.1 = Some(row.image.id);
         }
+        entry.0.push(row.image);
     }
 
-    let mut clusters = Vec::new();
-    for (cluster_id, (image_ids, keeper_id)) in cluster_map {
-        let mut images = Vec::new();
-        for iid in image_ids {
-            if let Ok(Some(img)) = queries::get_image_by_id(&state.db, iid).await {
-                images.push(img);
-            }
-        }
-        clusters.push(DuplicateCluster {
+    let clusters = cluster_map
+        .into_iter()
+        .map(|(cluster_id, (images, suggested_keeper_id))| DuplicateCluster {
             cluster_id,
             images,
-            suggested_keeper_id: keeper_id,
-        });
-    }
+            suggested_keeper_id,
+        })
+        .collect();
 
     Ok(clusters)
 }
@@ -229,9 +224,10 @@ pub async fn process_group(
     let cancelled = Arc::new(AtomicBool::new(false));
     let pool = state.db.clone();
     let app_clone = app.clone();
+    let processing_threads = state.settings.read().unwrap().processing_threads;
 
     let handle = tokio::spawn(async move {
-        job_runner::run_job(pool, app_clone, job_id, cancelled)
+        job_runner::run_job(pool, app_clone, job_id, cancelled, processing_threads)
             .await
             .ok();
     });
@@ -243,12 +239,26 @@ pub async fn process_group(
 
 #[tauri::command]
 pub async fn remove_group(
+    app: AppHandle,
     state: State<'_, Arc<AppState>>,
     group_id: i64,
 ) -> Result<(), String> {
-    queries::remove_group(&state.db, group_id)
+    let image_ids = queries::remove_group(&state.db, group_id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+
+    // Remove cached thumbnails for all deleted images
+    if let Ok(thumb_dir) = tauri::Manager::path(&app)
+        .app_data_dir()
+        .map(|d| d.join("thumbnails"))
+    {
+        for id in image_ids {
+            let thumb = thumb_dir.join(format!("{id}.jpg"));
+            let _ = std::fs::remove_file(thumb);
+        }
+    }
+
+    Ok(())
 }
 
 #[tauri::command]

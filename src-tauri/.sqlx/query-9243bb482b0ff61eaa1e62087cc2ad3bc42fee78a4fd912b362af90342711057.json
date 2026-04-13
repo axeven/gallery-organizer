@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT image_id FROM group_members WHERE group_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "image_id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "9243bb482b0ff61eaa1e62087cc2ad3bc42fee78a4fd912b362af90342711057"
+}

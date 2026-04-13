@@ -36,6 +36,8 @@ kamadak-exif = "0.5"
 image_hasher = "2"
 webp = "0.3"
 zune-jpeg = "0.5"
+fast_image_resize = { version = "5", features = ["image"] }
+mozjpeg = { version = "0.10", features = ["with_simd"] }
 
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2"

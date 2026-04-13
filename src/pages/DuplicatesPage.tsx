@@ -159,6 +159,8 @@ function ClusterCard({ cluster }: { cluster: DuplicateCluster }) {
 
 export default function DuplicatesPage() {
   const queryClient = useQueryClient();
+  const [confirmTrashAll, setConfirmTrashAll] = useState(false);
+  const [trashAllProgress, setTrashAllProgress] = useState<{ done: number; total: number } | null>(null);
 
   const { data: clusters, isLoading } = useQuery({
     queryKey: ["duplicate-clusters"],
@@ -176,6 +178,31 @@ export default function DuplicatesPage() {
     return acc + sorted.slice(1).reduce((s, img) => s + img.fileSizeBytes, 0);
   }, 0) ?? 0;
 
+  // Collect all non-keeper images across all clusters.
+  // If a cluster has no keeper set, keep the largest image (first after sort by size desc).
+  const nonKeeperImages = clusters?.flatMap((c) => {
+    const keeperId = c.suggestedKeeperId
+      ?? [...c.images].sort((a, b) => b.fileSizeBytes - a.fileSizeBytes)[0]?.id
+      ?? null;
+    return c.images.filter((img) => img.id !== keeperId);
+  }) ?? [];
+
+  const handleTrashAll = async () => {
+    setConfirmTrashAll(false);
+    setTrashAllProgress({ done: 0, total: nonKeeperImages.length });
+    for (let i = 0; i < nonKeeperImages.length; i++) {
+      try {
+        await trashImage(nonKeeperImages[i].id);
+        queryClient.removeQueries({ queryKey: ["thumbnail", nonKeeperImages[i].id] });
+      } catch {
+        // continue on individual failures
+      }
+      setTrashAllProgress({ done: i + 1, total: nonKeeperImages.length });
+    }
+    setTrashAllProgress(null);
+    queryClient.invalidateQueries({ queryKey: ["duplicate-clusters"] });
+  };
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
@@ -187,13 +214,46 @@ export default function DuplicatesPage() {
             </p>
           )}
         </div>
-        <button
-          onClick={() => rebuild.mutate()}
-          disabled={rebuild.isPending}
-          className="px-3 py-1.5 text-xs bg-neutral-700 hover:bg-neutral-600 rounded-lg disabled:opacity-40 transition-colors"
-        >
-          {rebuild.isPending ? "Scanning…" : "Find Duplicates"}
-        </button>
+        <div className="flex items-center gap-2">
+          {nonKeeperImages.length > 0 && !trashAllProgress && (
+            confirmTrashAll ? (
+              <div className="flex items-center gap-1.5 text-xs">
+                <span className="text-neutral-400">Trash {nonKeeperImages.length} duplicates?</span>
+                <button
+                  onClick={handleTrashAll}
+                  className="px-2 py-1 bg-red-600 hover:bg-red-500 rounded text-white transition-colors"
+                >
+                  Yes, trash
+                </button>
+                <button
+                  onClick={() => setConfirmTrashAll(false)}
+                  className="px-2 py-1 bg-neutral-700 hover:bg-neutral-600 rounded text-white transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setConfirmTrashAll(true)}
+                className="px-3 py-1.5 text-xs bg-red-800 hover:bg-red-700 rounded-lg transition-colors"
+              >
+                Trash all duplicates
+              </button>
+            )
+          )}
+          {trashAllProgress && (
+            <span className="text-xs text-neutral-400">
+              Trashing… {trashAllProgress.done}/{trashAllProgress.total}
+            </span>
+          )}
+          <button
+            onClick={() => rebuild.mutate()}
+            disabled={rebuild.isPending}
+            className="px-3 py-1.5 text-xs bg-neutral-700 hover:bg-neutral-600 rounded-lg disabled:opacity-40 transition-colors"
+          >
+            {rebuild.isPending ? "Scanning…" : "Find Duplicates"}
+          </button>
+        </div>
       </div>
 
       {isLoading && <p className="text-sm text-neutral-500">Loading…</p>}

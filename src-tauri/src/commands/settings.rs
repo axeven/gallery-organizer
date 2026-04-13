@@ -42,6 +42,9 @@ pub async fn update_settings(
     if let Some(v) = payload.get("scanRecursive").and_then(|v| v.as_bool()) {
         current.scan_recursive = v;
     }
+    if let Some(v) = payload.get("processingThreads").and_then(|v| v.as_u64()) {
+        current.processing_threads = v as u32;
+    }
 
     settings::save(&state.db, &current)
         .await

@@ -62,9 +62,10 @@ pub async fn start_job(
     let cancelled = Arc::new(AtomicBool::new(false));
     let pool = state.db.clone();
     let app_clone = app.clone();
+    let processing_threads = state.settings.read().unwrap().processing_threads;
 
     let handle = tokio::spawn(async move {
-        job_runner::run_job(pool, app_clone, job_id, cancelled)
+        job_runner::run_job(pool, app_clone, job_id, cancelled, processing_threads)
             .await
             .ok();
     });

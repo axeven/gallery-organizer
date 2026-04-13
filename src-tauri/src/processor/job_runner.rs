@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -9,6 +9,18 @@ use tauri::{AppHandle, Emitter};
 
 use crate::db::queries;
 use crate::processor::{compress, output};
+
+/// Returns true if `a` and `b` refer to the same underlying file (same
+/// device + inode on Unix). Used to avoid trashing a file whose extension
+/// changed only in case (e.g. .JPG → .jpg) on a case-insensitive FS like
+/// NTFS, where both paths resolve to the same inode.
+fn same_inode(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (std::fs::metadata(a), std::fs::metadata(b)) {
+        (Ok(ma), Ok(mb)) => ma.dev() == mb.dev() && ma.ino() == mb.ino(),
+        _ => false,
+    }
+}
 
 /// Params for the unified "process" job (replaces both "organize" and "compress").
 /// All fields optional — omitting resize/format/quality = copy-only.
@@ -43,6 +55,8 @@ pub async fn run_job(
     app: AppHandle,
     job_id: i64,
     cancelled: Arc<AtomicBool>,
+    // Max rayon threads. 0 = auto (num_cpus - 1).
+    processing_threads: u32,
 ) -> Result<()> {
     let job = queries::get_job(&pool, job_id)
         .await?
@@ -69,11 +83,29 @@ pub async fn run_job(
     if job.operation == "process" || job.operation == "organize" {
         let params: ProcessJobParams = serde_json::from_str(&job.params_json)?;
         let in_place = job.output_mode == "in_place";
+        log::info!(
+            "run_job {job_id}: output_mode={:?} in_place={in_place} resize={:?} target_format={:?} quality={:?}",
+            job.output_mode, params.resize, params.target_format, params.quality
+        );
 
         // For folder mode, create the destination directory up front.
         let out_dir: Option<PathBuf> = if !in_place {
+            // Sanitize the label for use as a directory name: replace characters
+            // that are invalid on Windows/NTFS (<>:"/\|?*) with underscores,
+            // and trim leading/trailing dots and spaces.
+            let safe_label: String = params
+                .group_label
+                .chars()
+                .map(|c| match c {
+                    '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
+                    c => c,
+                })
+                .collect::<String>()
+                .trim_matches(|c: char| c == '.' || c == ' ')
+                .to_string();
+            let folder_name = if safe_label.is_empty() { "output".to_string() } else { safe_label };
             let d = PathBuf::from(job.output_dir.as_deref().unwrap_or("."))
-                .join(&params.group_label);
+                .join(&folder_name);
             if let Err(e) = std::fs::create_dir_all(&d) {
                 queries::update_job_status(&pool, job_id, "failed").await?;
                 return Err(anyhow::anyhow!("failed to create output dir: {e}"));
@@ -103,41 +135,90 @@ pub async fn run_job(
         // handle stays valid for the lifetime of the rayon work even after abort.
         let rt = tokio::runtime::Handle::current();
 
-        image_entries.par_iter().for_each(|(image_id, file_path)| {
+        // Use the user-configured thread limit, or default to (num_cpus - 1).
+        let num_threads = if processing_threads > 0 {
+            processing_threads as usize
+        } else {
+            (num_cpus::get().saturating_sub(1)).max(1)
+        };
+        let rayon_pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(num_threads)
+            .build()
+            .unwrap_or_else(|_| rayon::ThreadPoolBuilder::new().build().unwrap());
+
+        rayon_pool.install(|| image_entries.par_iter().for_each(|(image_id, file_path)| {
             if cancelled.load(Ordering::Relaxed) {
                 return;
             }
 
             let src = PathBuf::from(file_path);
 
+            // Warn early if the path is suspiciously long — helps diagnose
+            // "file name too long" errors on NTFS/WSL2 paths.
+            if file_path.len() > 240 {
+                log::warn!("long path ({} chars): {file_path}", file_path.len());
+            }
+
             // On success: (status, error, new_path, Option<(size, w, h, fmt)> for metadata update)
             type MetaUpdate = Option<(i64, u32, u32, String)>;
+            // Derive the source extension (lowercase, no dot) for use as the
+            // default output format — avoids silently re-encoding e.g. PNG→JPEG.
+            let src_ext = src
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.to_lowercase())
+                .unwrap_or_else(|| "jpg".to_string());
+
             let (status, error, new_path, meta): (&str, Option<String>, Option<String>, MetaUpdate) = if in_place {
                 // ── Overwrite in place ──────────────────────────────────────
-                let fmt = compress_params.target_format.as_deref().unwrap_or("jpeg");
+                let fmt = compress_params.target_format.as_deref().unwrap_or(&src_ext);
                 match compress::process_image(&src, &compress_params, fmt) {
                     Ok((data, ext, out_w, out_h)) => {
                         let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
                         let parent = src.parent().unwrap_or(std::path::Path::new("."));
                         let dst = parent.join(format!("{stem}.{ext}"));
                         let size = data.len() as i64;
+                        // Write to a temp file in the system temp dir (avoids
+                        // cross-device rename issues on WSL2 NTFS mounts), then
+                        // copy over the destination and remove the temp file.
                         let result = (|| -> std::io::Result<()> {
                             let tmp = tempfile::Builder::new()
                                 .prefix(".gallery-tmp-")
                                 .suffix(&format!(".{ext}"))
-                                .tempfile_in(parent)?;
+                                .tempfile()?;
                             let tmp_path = tmp.path().to_path_buf();
                             std::fs::write(&tmp_path, &data)?;
-                            std::fs::rename(&tmp_path, &dst)?;
-                            std::mem::forget(tmp);
+                            // Try atomic rename first; fall back to copy+delete if
+                            // src and tmp are on different filesystems (WSL2 NTFS).
+                            if std::fs::rename(&tmp_path, &dst).is_err() {
+                                std::fs::copy(&tmp_path, &dst)?;
+                                // tmp dropped here cleans up the temp file
+                            } else {
+                                std::mem::forget(tmp);
+                            }
                             Ok(())
                         })();
                         match result {
                             Ok(_) => {
                                 let new = dst.to_string_lossy().into_owned();
+                                // If the extension changed (e.g. .JPG → .jpg), we may
+                                // have written a new file alongside the original.
+                                // Guard: only trash src when dst and src are provably
+                                // different files (different inodes or different canonical
+                                // paths). On NTFS mounts, .JPG and .jpg resolve to the
+                                // same inode so we must not trash in that case.
+                                if dst != src {
+                                    let same_file = same_inode(&src, &dst);
+                                    if !same_file {
+                                        let _ = trash::delete(&src);
+                                    }
+                                }
                                 ("done", None, Some(new), Some((size, out_w, out_h, ext)))
                             }
-                            Err(e) => ("failed", Some(e.to_string()), None, None),
+                            Err(e) => {
+                                log::error!("in-place write failed for {src:?}: {e}");
+                                ("failed", Some(e.to_string()), None, None)
+                            }
                         }
                     }
                     Err(e) => ("failed", Some(e.to_string()), None, None),
@@ -145,7 +226,7 @@ pub async fn run_job(
             } else if do_reencode {
                 // ── Re-encode to output folder ──────────────────────────────
                 let dir = out_dir.as_ref().unwrap();
-                let fmt = compress_params.target_format.as_deref().unwrap_or("jpeg");
+                let fmt = compress_params.target_format.as_deref().unwrap_or(&src_ext);
                 match compress::process_image(&src, &compress_params, fmt) {
                     Ok((data, ext, out_w, out_h)) => {
                         let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
@@ -154,7 +235,7 @@ pub async fn run_job(
                         match std::fs::write(&dst, &data) {
                             Ok(_) => {
                                 if params.move_files {
-                                    let _ = std::fs::remove_file(&src);
+                                    let _ = trash::delete(&src);
                                     let new = dst.to_string_lossy().into_owned();
                                     // Moved + re-encoded: update path and metadata
                                     ("done", None, Some(new), Some((size, out_w, out_h, ext)))
@@ -176,7 +257,7 @@ pub async fn run_job(
                 if params.move_files {
                     let result = std::fs::rename(&src, &dst).or_else(|_| {
                         std::fs::copy(&src, &dst).map(|_| ())?;
-                        std::fs::remove_file(&src)
+                        trash::delete(&src).map_err(|e| std::io::Error::other(e.to_string()))
                     });
                     match result {
                         // Only path changes, file content identical
@@ -231,7 +312,7 @@ pub async fn run_job(
                     status: status.to_string(),
                 },
             );
-        });
+        }));
     } else {
         // ── Legacy "compress" operation (kept for old jobs in DB) ────────────
         let params: compress::ProcessParams = serde_json::from_str(&job.params_json)?;
