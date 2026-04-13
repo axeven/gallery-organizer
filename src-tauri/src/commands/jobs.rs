@@ -95,6 +95,20 @@ pub async fn cancel_job(
 }
 
 #[tauri::command]
+pub async fn delete_job(
+    state: State<'_, Arc<AppState>>,
+    job_id: i64,
+) -> Result<(), String> {
+    // If somehow still running, abort first
+    if let Some(h) = state.job_handles.lock().unwrap().remove(&job_id) {
+        h.abort();
+    }
+    queries::delete_job(&state.db, job_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn get_jobs(
     state: State<'_, Arc<AppState>>,
     status: Option<String>,

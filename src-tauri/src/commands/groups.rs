@@ -1,11 +1,11 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::db::{models::DbImage, queries};
-use crate::processor::job_runner;
+use crate::processor::{compress, job_runner};
 use crate::AppState;
 
 #[derive(Debug, Serialize)]
@@ -117,14 +117,66 @@ pub async fn dismiss_cluster(
         .map_err(|e| e.to_string())
 }
 
+/// Per-image info returned by get_group_summary, used by the frontend
+/// to estimate output sizes before starting a job.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageSummaryItem {
+    pub image_id: i64,
+    pub file_name: String,
+    pub file_size_bytes: i64,
+    pub width_px: Option<i64>,
+    pub height_px: Option<i64>,
+}
+
 #[tauri::command]
-pub async fn export_group(
+pub async fn get_group_summary(
+    state: State<'_, Arc<AppState>>,
+    group_id: i64,
+) -> Result<Vec<ImageSummaryItem>, String> {
+    let image_paths = queries::get_group_image_paths(&state.db, group_id)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let mut items = Vec::new();
+    for (image_id, _) in image_paths {
+        if let Ok(Some(img)) = queries::get_image_by_id(&state.db, image_id).await {
+            items.push(ImageSummaryItem {
+                image_id: img.id,
+                file_name: img.file_name,
+                file_size_bytes: img.file_size_bytes,
+                width_px: img.width_px,
+                height_px: img.height_px,
+            });
+        }
+    }
+    Ok(items)
+}
+
+/// Params sent from the frontend to configure per-group processing.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessGroupPayload {
+    /// "folder" = write to output_dir/group_label/, "overwrite" = replace originals in place.
+    pub output_mode: String,
+    pub output_dir: Option<String>,
+    pub move_files: bool,
+    pub resize: compress::ResizeMode,
+    pub target_format: Option<String>,
+    pub quality: Option<u8>,
+}
+
+#[tauri::command]
+pub async fn process_group(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
     group_id: i64,
-    output_dir: String,
-    move_files: bool,
+    payload: ProcessGroupPayload,
 ) -> Result<i64, String> {
+    if payload.output_mode == "folder" && payload.output_dir.as_deref().unwrap_or("").is_empty() {
+        return Err("output_dir is required for folder mode".into());
+    }
+
     // Fetch group label and image IDs
     let groups = queries::get_groups(&state.db, None)
         .await
@@ -147,18 +199,27 @@ pub async fn export_group(
         return Err("group has no images".into());
     }
 
+    let (db_output_mode, db_output_dir) = if payload.output_mode == "overwrite" {
+        ("in_place", None)
+    } else {
+        ("output_folder", payload.output_dir.as_deref())
+    };
+
     let params_json = serde_json::json!({
         "groupLabel": group_label,
-        "moveFiles": move_files,
+        "moveFiles": payload.move_files,
+        "resize": payload.resize,
+        "targetFormat": payload.target_format,
+        "quality": payload.quality,
     })
     .to_string();
 
     let job_id = queries::create_job(
         &state.db,
-        "organize",
+        "process",
         &params_json,
-        "output_folder",
-        Some(&output_dir),
+        db_output_mode,
+        db_output_dir,
         &image_ids,
     )
     .await

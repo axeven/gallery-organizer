@@ -46,6 +46,7 @@ pub struct DbGroup {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
 pub struct DbProcessingJob {
     pub id: i64,
     pub status: String,

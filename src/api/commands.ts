@@ -65,6 +65,29 @@ export interface AppSettings {
   scanRecursive: boolean;
 }
 
+export type ResizeMode =
+  | { mode: "none" }
+  | { mode: "half" }
+  | { mode: "fixed"; width: number; height: number };
+
+export interface ProcessGroupPayload {
+  /** "folder" = write to outputDir/groupLabel/, "overwrite" = replace originals in place */
+  outputMode: "folder" | "overwrite";
+  outputDir?: string;
+  moveFiles: boolean;
+  resize: ResizeMode;
+  targetFormat?: "jpeg" | "webp";
+  quality?: number;
+}
+
+export interface ImageSummaryItem {
+  imageId: number;
+  fileName: string;
+  fileSizeBytes: number;
+  widthPx: number | null;
+  heightPx: number | null;
+}
+
 export interface ProcessParams {
   quality?: number;
   width?: number;
@@ -134,8 +157,11 @@ export const setKeeper = (groupId: number, imageId: number) =>
 export const dismissCluster = (groupId: number) =>
   invoke<void>("dismiss_cluster", { groupId });
 
-export const exportGroup = (groupId: number, outputDir: string, moveFiles: boolean) =>
-  invoke<number>("export_group", { groupId, outputDir, moveFiles });
+export const getGroupSummary = (groupId: number) =>
+  invoke<ImageSummaryItem[]>("get_group_summary", { groupId });
+
+export const processGroup = (groupId: number, payload: ProcessGroupPayload) =>
+  invoke<number>("process_group", { groupId, payload });
 
 export const removeGroup = (groupId: number) =>
   invoke<void>("remove_group", { groupId });
@@ -162,6 +188,9 @@ export const startJob = (jobId: number) =>
 
 export const cancelJob = (jobId: number) =>
   invoke<void>("cancel_job", { jobId });
+
+export const deleteJob = (jobId: number) =>
+  invoke<void>("delete_job", { jobId });
 
 export const getJobs = (params: {
   status?: string;
@@ -218,13 +247,13 @@ export async function setupEventBridge(queryClient: QueryClient): Promise<void> 
 
     listen<{ job_id: number }>("job:complete", (e) => {
       useJobStore.getState().clearJob(e.payload.job_id);
-      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      queryClient.invalidateQueries({ queryKey: ["jobs"], refetchType: "all" });
       queryClient.invalidateQueries({ queryKey: ["images"] });
     }),
 
     listen<{ job_id: number }>("job:failed", (e) => {
       useJobStore.getState().clearJob(e.payload.job_id);
-      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      queryClient.invalidateQueries({ queryKey: ["jobs"], refetchType: "all" });
     }),
   ]);
 }

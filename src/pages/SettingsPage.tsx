@@ -52,7 +52,7 @@ export default function SettingsPage() {
           <select
             value={merged.outputMode ?? "output_folder"}
             onChange={(e) => setDraft((d) => ({ ...d, outputMode: e.target.value as AppSettings["outputMode"] }))}
-            className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1.5 text-sm"
+            className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1.5 text-sm [color-scheme:dark]"
           >
             <option value="output_folder">Save to output folder</option>
             <option value="in_place">Overwrite originals in-place</option>
@@ -86,7 +86,7 @@ export default function SettingsPage() {
           <select
             value={merged.defaultFormat ?? "jpeg"}
             onChange={(e) => setDraft((d) => ({ ...d, defaultFormat: e.target.value as AppSettings["defaultFormat"] }))}
-            className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1.5 text-sm"
+            className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1.5 text-sm [color-scheme:dark]"
           >
             <option value="jpeg">JPEG</option>
             <option value="webp">WebP</option>
@@ -116,7 +116,7 @@ export default function SettingsPage() {
           <select
             value={merged.dateGroupGranularity ?? "day"}
             onChange={(e) => setDraft((d) => ({ ...d, dateGroupGranularity: e.target.value as AppSettings["dateGroupGranularity"] }))}
-            className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1.5 text-sm"
+            className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1.5 text-sm [color-scheme:dark]"
           >
             <option value="day">By Day</option>
             <option value="month">By Month</option>

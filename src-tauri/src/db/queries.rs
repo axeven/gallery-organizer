@@ -122,6 +122,41 @@ pub async fn get_all_image_paths(pool: &SqlitePool) -> Result<Vec<(i64, String)>
     Ok(rows.into_iter().map(|r| (r.id, r.file_path)).collect())
 }
 
+/// Update metadata fields that change after a re-encode: size, dims, format, path (if changed).
+pub async fn update_image_after_process(
+    pool: &SqlitePool,
+    id: i64,
+    new_path: &str,
+    file_size_bytes: i64,
+    width_px: u32,
+    height_px: u32,
+    format: &str,
+) -> Result<()> {
+    let now = chrono::Utc::now().timestamp();
+    let file_name = std::path::Path::new(new_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string();
+    let w = width_px as i64;
+    let h = height_px as i64;
+    sqlx::query!(
+        "UPDATE images SET file_path = ?, file_name = ?, file_size_bytes = ?, \
+         width_px = ?, height_px = ?, format = ?, updated_at = ? WHERE id = ?",
+        new_path,
+        file_name,
+        file_size_bytes,
+        w,
+        h,
+        format,
+        now,
+        id
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 pub async fn update_image_path(pool: &SqlitePool, id: i64, new_path: &str) -> Result<()> {
     let now = chrono::Utc::now().timestamp();
     let file_name = std::path::Path::new(new_path)
@@ -379,6 +414,14 @@ pub async fn create_job(
     }
 
     Ok(job_id)
+}
+
+pub async fn delete_job(pool: &SqlitePool, job_id: i64) -> Result<()> {
+    // job_images has ON DELETE CASCADE from job_id FK, so this cleans up both tables.
+    sqlx::query!("DELETE FROM processing_jobs WHERE id = ?", job_id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 pub async fn get_job(pool: &SqlitePool, job_id: i64) -> Result<Option<DbProcessingJob>> {

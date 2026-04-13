@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM processing_jobs WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "40d0bd4698c0e5c808c322d439cecd48f30ea2e7de6bf24acd1aea415fcdd816"
+}

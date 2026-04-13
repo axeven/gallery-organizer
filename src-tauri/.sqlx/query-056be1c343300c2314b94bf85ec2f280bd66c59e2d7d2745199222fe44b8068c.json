@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE images SET file_path = ?, file_name = ?, file_size_bytes = ?, width_px = ?, height_px = ?, format = ?, updated_at = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 8
+    },
+    "nullable": []
+  },
+  "hash": "056be1c343300c2314b94bf85ec2f280bd66c59e2d7d2745199222fe44b8068c"
+}

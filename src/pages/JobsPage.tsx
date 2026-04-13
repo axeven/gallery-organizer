@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { getJobs, createJob, startJob, cancelJob, retryFailedImages, getImages } from "../api/commands";
+import { getJobs, createJob, startJob, cancelJob, deleteJob, retryFailedImages, getImages } from "../api/commands";
 import { useJobStore } from "../store/jobStore";
 import type { ProcessingJob } from "../api/commands";
 
@@ -18,7 +18,15 @@ function JobItem({ job }: { job: ProcessingJob }) {
     : 0;
 
   const cancel = useMutation({
-    mutationFn: () => cancelJob(job.id),
+    mutationFn: async () => {
+      await cancelJob(job.id);
+      await deleteJob(job.id);
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["jobs"] }),
+  });
+
+  const remove = useMutation({
+    mutationFn: () => deleteJob(job.id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["jobs"] }),
   });
 
@@ -64,6 +72,16 @@ function JobItem({ job }: { job: ProcessingJob }) {
               Retry {job.failedCount} failed
             </button>
           )}
+          {job.status !== "running" && (
+            <button
+              onClick={() => remove.mutate()}
+              disabled={remove.isPending}
+              className="text-xs text-neutral-600 hover:text-red-400 disabled:opacity-40 transition-colors"
+              title="Delete job record"
+            >
+              ✕
+            </button>
+          )}
         </div>
       </div>
       <div className="w-full h-1.5 bg-neutral-800 rounded-full overflow-hidden">
@@ -91,7 +109,12 @@ export default function JobsPage() {
   const { data: jobs } = useQuery({
     queryKey: ["jobs"],
     queryFn: () => getJobs({}),
-    refetchInterval: 2000,
+    staleTime: 0,
+    // Poll only while a job is running; otherwise refetch on mount is enough
+    refetchInterval: (query) => {
+      const items = query.state.data?.items ?? [];
+      return items.some((j) => j.status === "running" || j.status === "queued") ? 1000 : false;
+    },
   });
 
   const { data: allImages } = useQuery({

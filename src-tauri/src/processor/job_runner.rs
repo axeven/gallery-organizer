@@ -4,19 +4,28 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use rayon::prelude::*;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
-
-use serde::Deserialize;
 
 use crate::db::queries;
 use crate::processor::{compress, output};
 
-#[derive(Debug, Deserialize)]
+/// Params for the unified "process" job (replaces both "organize" and "compress").
+/// All fields optional — omitting resize/format/quality = copy-only.
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct OrganizeParams {
-    group_label: String,
-    move_files: bool,
+pub struct ProcessJobParams {
+    /// Sub-folder name to create inside output_dir (typically the group label).
+    pub group_label: String,
+    /// If true, delete source file after successful write.
+    pub move_files: bool,
+    /// Resize specification. Defaults to None (no resize).
+    #[serde(default)]
+    pub resize: compress::ResizeMode,
+    /// Target format: "jpeg" or "webp". Defaults to "jpeg".
+    pub target_format: Option<String>,
+    /// Encode quality 1–100. Defaults to 85.
+    pub quality: Option<u8>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -55,16 +64,44 @@ pub async fn run_job(
         }
     }
 
-    if job.operation == "organize" {
-        // ── Organize: copy or move files into {output_dir}/{group_label}/
-        let params: OrganizeParams = serde_json::from_str(&job.params_json)?;
-        let out_dir = PathBuf::from(job.output_dir.as_deref().unwrap_or("."))
-            .join(&params.group_label);
+    // ── Unified "process" operation ──────────────────────────────────────────
+    // Also handles the legacy "organize" name so old DB jobs still work.
+    if job.operation == "process" || job.operation == "organize" {
+        let params: ProcessJobParams = serde_json::from_str(&job.params_json)?;
+        let in_place = job.output_mode == "in_place";
 
-        if let Err(e) = std::fs::create_dir_all(&out_dir) {
-            queries::update_job_status(&pool, job_id, "failed").await?;
-            return Err(anyhow::anyhow!("failed to create output dir: {e}"));
-        }
+        // For folder mode, create the destination directory up front.
+        let out_dir: Option<PathBuf> = if !in_place {
+            let d = PathBuf::from(job.output_dir.as_deref().unwrap_or("."))
+                .join(&params.group_label);
+            if let Err(e) = std::fs::create_dir_all(&d) {
+                queries::update_job_status(&pool, job_id, "failed").await?;
+                return Err(anyhow::anyhow!("failed to create output dir: {e}"));
+            }
+            Some(d)
+        } else {
+            None
+        };
+
+        // Build compress params once (shared across all images)
+        let compress_params = compress::ProcessParams {
+            quality: params.quality,
+            width: None,
+            height: None,
+            fit: None,
+            target_format: params.target_format.clone(),
+            resize: params.resize.clone(),
+        };
+
+        let do_reencode = params.resize != compress::ResizeMode::None
+            || params.target_format.is_some()
+            || params.quality.is_some();
+
+        // Capture the tokio handle before entering rayon. Rayon threads are not
+        // tokio threads, so Handle::current() inside par_iter would panic if the
+        // parent task was aborted (cancel_job). Capturing it here guarantees the
+        // handle stays valid for the lifetime of the rayon work even after abort.
+        let rt = tokio::runtime::Handle::current();
 
         image_entries.par_iter().for_each(|(image_id, file_path)| {
             if cancelled.load(Ordering::Relaxed) {
@@ -72,23 +109,85 @@ pub async fn run_job(
             }
 
             let src = PathBuf::from(file_path);
-            let file_name = src.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            let dst = out_dir.join(&file_name);
 
-            let (status, error, new_path) = if params.move_files {
-                // Try rename first (same filesystem, instant); fall back to copy+delete
-                let result = std::fs::rename(&src, &dst).or_else(|_| {
-                    std::fs::copy(&src, &dst).map(|_| ())?;
-                    std::fs::remove_file(&src)
-                });
-                match result {
-                    Ok(_) => ("done", None, Some(dst.to_string_lossy().into_owned())),
-                    Err(e) => ("failed", Some(e.to_string()), None),
+            // On success: (status, error, new_path, Option<(size, w, h, fmt)> for metadata update)
+            type MetaUpdate = Option<(i64, u32, u32, String)>;
+            let (status, error, new_path, meta): (&str, Option<String>, Option<String>, MetaUpdate) = if in_place {
+                // ── Overwrite in place ──────────────────────────────────────
+                let fmt = compress_params.target_format.as_deref().unwrap_or("jpeg");
+                match compress::process_image(&src, &compress_params, fmt) {
+                    Ok((data, ext, out_w, out_h)) => {
+                        let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
+                        let parent = src.parent().unwrap_or(std::path::Path::new("."));
+                        let dst = parent.join(format!("{stem}.{ext}"));
+                        let size = data.len() as i64;
+                        let result = (|| -> std::io::Result<()> {
+                            let tmp = tempfile::Builder::new()
+                                .prefix(".gallery-tmp-")
+                                .suffix(&format!(".{ext}"))
+                                .tempfile_in(parent)?;
+                            let tmp_path = tmp.path().to_path_buf();
+                            std::fs::write(&tmp_path, &data)?;
+                            std::fs::rename(&tmp_path, &dst)?;
+                            std::mem::forget(tmp);
+                            Ok(())
+                        })();
+                        match result {
+                            Ok(_) => {
+                                let new = dst.to_string_lossy().into_owned();
+                                ("done", None, Some(new), Some((size, out_w, out_h, ext)))
+                            }
+                            Err(e) => ("failed", Some(e.to_string()), None, None),
+                        }
+                    }
+                    Err(e) => ("failed", Some(e.to_string()), None, None),
+                }
+            } else if do_reencode {
+                // ── Re-encode to output folder ──────────────────────────────
+                let dir = out_dir.as_ref().unwrap();
+                let fmt = compress_params.target_format.as_deref().unwrap_or("jpeg");
+                match compress::process_image(&src, &compress_params, fmt) {
+                    Ok((data, ext, out_w, out_h)) => {
+                        let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
+                        let dst = dir.join(format!("{stem}.{ext}"));
+                        let size = data.len() as i64;
+                        match std::fs::write(&dst, &data) {
+                            Ok(_) => {
+                                if params.move_files {
+                                    let _ = std::fs::remove_file(&src);
+                                    let new = dst.to_string_lossy().into_owned();
+                                    // Moved + re-encoded: update path and metadata
+                                    ("done", None, Some(new), Some((size, out_w, out_h, ext)))
+                                } else {
+                                    // Copied + re-encoded: original unchanged, don't touch its record
+                                    ("done", None, None, None)
+                                }
+                            }
+                            Err(e) => ("failed", Some(e.to_string()), None, None),
+                        }
+                    }
+                    Err(e) => ("failed", Some(e.to_string()), None, None),
                 }
             } else {
-                match std::fs::copy(&src, &dst) {
-                    Ok(_) => ("done", None, None),
-                    Err(e) => ("failed", Some(e.to_string()), None),
+                // ── Copy-only to output folder (no re-encode) ───────────────
+                let dir = out_dir.as_ref().unwrap();
+                let file_name = src.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                let dst = dir.join(&file_name);
+                if params.move_files {
+                    let result = std::fs::rename(&src, &dst).or_else(|_| {
+                        std::fs::copy(&src, &dst).map(|_| ())?;
+                        std::fs::remove_file(&src)
+                    });
+                    match result {
+                        // Only path changes, file content identical
+                        Ok(_) => ("done", None, Some(dst.to_string_lossy().into_owned()), None),
+                        Err(e) => ("failed", Some(e.to_string()), None, None),
+                    }
+                } else {
+                    match std::fs::copy(&src, &dst) {
+                        Ok(_) => ("done", None, None, None),
+                        Err(e) => ("failed", Some(e.to_string()), None, None),
+                    }
                 }
             };
 
@@ -96,38 +195,45 @@ pub async fn run_job(
             let jid = job_id;
             let iid = *image_id;
             let err_ref = error.as_deref();
-            tokio::task::block_in_place(|| {
-                let rt = tokio::runtime::Handle::current();
-                rt.block_on(queries::update_job_image_status(&pool_clone, jid, iid, status, err_ref))
+            rt.block_on(queries::update_job_image_status(
+                &pool_clone, jid, iid, status, err_ref,
+            ))
+            .ok();
+            if let (Some(ref np), Some((size, w, h, ref fmt))) = (new_path.as_ref(), meta.as_ref()) {
+                rt.block_on(queries::update_image_after_process(
+                    &pool_clone, iid, np, *size, *w, *h, fmt,
+                ))
+                .ok();
+            } else if let Some(ref np) = new_path {
+                rt.block_on(queries::update_image_path(&pool_clone, iid, np))
                     .ok();
-                // Update the DB file_path so it stays in sync with the moved file
-                if let Some(ref np) = new_path {
-                    rt.block_on(queries::update_image_path(&pool_clone, iid, np)).ok();
-                }
-            });
+            }
 
-            if status == "done" { processed.fetch_add(1, Ordering::Relaxed); }
-            else { failed.fetch_add(1, Ordering::Relaxed); }
+            if status == "done" {
+                processed.fetch_add(1, Ordering::Relaxed);
+            } else {
+                failed.fetch_add(1, Ordering::Relaxed);
+            }
 
             let done = processed.load(Ordering::Relaxed);
             let fail = failed.load(Ordering::Relaxed);
             let pool_clone = pool.clone();
-            tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current()
-                    .block_on(queries::update_job_progress(&pool_clone, jid, done, fail))
-                    .ok();
-            });
+            rt.block_on(queries::update_job_progress(&pool_clone, jid, done, fail))
+                .ok();
 
-            let _ = app.emit("job:progress", JobProgressEvent {
-                job_id: jid,
-                processed: done + fail,
-                total,
-                current_file: file_path.clone(),
-                status: status.to_string(),
-            });
+            let _ = app.emit(
+                "job:progress",
+                JobProgressEvent {
+                    job_id: jid,
+                    processed: done + fail,
+                    total,
+                    current_file: file_path.clone(),
+                    status: status.to_string(),
+                },
+            );
         });
     } else {
-        // ── Compress / resize
+        // ── Legacy "compress" operation (kept for old jobs in DB) ────────────
         let params: compress::ProcessParams = serde_json::from_str(&job.params_json)?;
 
         let output_mode = match job.output_mode.as_str() {
@@ -141,21 +247,22 @@ pub async fn run_job(
             }
         };
 
+        let rt = tokio::runtime::Handle::current();
+
         image_entries.par_iter().for_each(|(image_id, file_path)| {
             if cancelled.load(Ordering::Relaxed) {
                 return;
             }
 
             let path = PathBuf::from(file_path);
-            let result = compress::process_image(&path, &params, "jpeg");
+            let format = params.target_format.as_deref().unwrap_or("jpeg");
+            let result = compress::process_image(&path, &params, format);
 
             let (status, error) = match result {
-                Ok((data, ext)) => {
-                    match output::write(&path, &data, &ext, &output_mode) {
-                        Ok(_) => ("done", None),
-                        Err(e) => ("failed", Some(e.to_string())),
-                    }
-                }
+                Ok((data, ext, _w, _h)) => match output::write(&path, &data, &ext, &output_mode) {
+                    Ok(_) => ("done", None),
+                    Err(e) => ("failed", Some(e.to_string())),
+                },
                 Err(e) => ("failed", Some(e.to_string())),
             };
 
@@ -163,12 +270,10 @@ pub async fn run_job(
             let jid = job_id;
             let iid = *image_id;
             let err_ref = error.as_deref();
-
-            tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current()
-                    .block_on(queries::update_job_image_status(&pool_clone, jid, iid, status, err_ref))
-                    .ok();
-            });
+            rt.block_on(queries::update_job_image_status(
+                &pool_clone, jid, iid, status, err_ref,
+            ))
+            .ok();
 
             if status == "done" {
                 processed.fetch_add(1, Ordering::Relaxed);
@@ -180,11 +285,8 @@ pub async fn run_job(
             let fail = failed.load(Ordering::Relaxed);
 
             let pool_clone = pool.clone();
-            tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current()
-                    .block_on(queries::update_job_progress(&pool_clone, jid, done, fail))
-                    .ok();
-            });
+            rt.block_on(queries::update_job_progress(&pool_clone, jid, done, fail))
+                .ok();
 
             let _ = app.emit(
                 "job:progress",
